@@ -117,6 +117,11 @@ class TileView(ctx: Context, val cardW: Int, val cardH: Int, private val labelH:
     private val radius = ctx.dp(12.5f)
     private val focus = FocusAnim(this, 1.2f) { invalidate() }
     private val card = RectF()
+    private val glass = GlassPainter().apply {
+        tintColor = 0xFFDCEBFF.toInt()
+        grain = 0.35f
+        stroke = ctx.dp(0.9f)
+    }
     private val artPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -278,6 +283,8 @@ class TileView(ctx: Context, val cardW: Int, val cardH: Int, private val labelH:
 
     companion object {
         const val HOLD_MS = 700L
+        /** When true, app tiles draw a Liquid Glass backdrop matching the active theme with a frosted glass logo. */
+        @JvmStatic var glassLogos = true
     }
 
     override fun onDraw(c: Canvas) {
@@ -290,7 +297,22 @@ class TileView(ctx: Context, val cardW: Int, val cardH: Int, private val labelH:
         GlowCache.draw(c, w, h, radius, blur, Color.BLACK, 0.30f + 0.40f * f, dp(3f) + dp(12f) * f, gp)
 
         val a = app
-        if (a != null && artPaint.shader != null) {
+        if (glassLogos) {
+            glass.tint = 0.09f + 0.06f * f
+            glass.dark = 0.28f - 0.06f * f
+            glass.sheen = 0.11f + 0.06f * f
+            glass.highlight = 0.44f + 0.22f * f
+            glass.border = 0.20f + 0.16f * f
+            glass.draw(c, this, card, radius)
+            val gArt = a?.glassArt ?: a?.art
+            if (gArt != null) {
+                val s = h * 0.58f
+                iconRect.set((w - s) / 2f, (h - s) / 2f, (w + s) / 2f, (h + s) / 2f)
+                iconPaint.alpha = (232 + (23 * f).toInt()).coerceIn(0, 255)
+                c.drawBitmap(gArt, null, iconRect, iconPaint)
+                iconPaint.alpha = 255
+            }
+        } else if (a != null && artPaint.shader != null) {
             c.drawRoundRect(card, radius, radius, artPaint)
         } else {
             if (bgPaint.shader == null) bgPaint.color = 0xFF2A3350.toInt()

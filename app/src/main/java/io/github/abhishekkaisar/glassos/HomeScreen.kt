@@ -118,6 +118,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
             shelf.invalidate()
             gear.invalidate()
             chevron.invalidate()
+            if (TileView.glassLogos) invalidateDeep(content)
             if (::scheduleView.isInitialized && scheduleView.visibility == View.VISIBLE) scheduleView.invalidateGlass()
             if (scrim.alpha > 0f) scrim.invalidate()
             if (settings.isOpen) invalidateDeep(settings.panel)
@@ -132,6 +133,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
     val isTrackerMode: Boolean get() = prefs.topShelf == HeroRepo.SRC_TRACKER
 
     init {
+        TileView.glassLogos = prefs.glassLogos
         Backdrop.addListener(backdropListener)
         Backdrop.addFrameListener(frameListener)
         buildUi()
@@ -372,8 +374,8 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
         } else {
             content.animate().translationY(target).setDuration(380)
                 .setInterpolator(android.view.animation.DecelerateInterpolator(2f))
-                .setUpdateListener { shelf.invalidate() }
-                .withEndAction { shelf.invalidate() }
+                .setUpdateListener { shelf.invalidate(); if (TileView.glassLogos) invalidateDeep(content) }
+                .withEndAction { shelf.invalidate(); if (TileView.glassLogos) invalidateDeep(content) }
                 .start()
             header.animate().alpha(if (r == 0) 1f else 0f).translationY(if (r == 0) 0f else -ctx.dp(40f)).setDuration(300).start()
             // The opaque scrim hides the hero completely once faded in: stop drawing the hero under it.
@@ -489,6 +491,13 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
         if (on && !HomeWatcher.hasAccess(ctx)) {
             Toast.makeText(ctx, "Needs usage access: adb shell appops set ${ctx.packageName} GET_USAGE_STATS allow", Toast.LENGTH_LONG).show()
         }
+    }
+
+    fun setGlassLogos(on: Boolean) {
+        prefs.glassLogos = on
+        TileView.glassLogos = on
+        invalidateDeep(root)
+        HomeShare.main?.takeIf { it !== this }?.let { invalidateDeep(it.root) }
     }
 
     // ---------- Wallpaper ----------

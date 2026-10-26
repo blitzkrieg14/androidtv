@@ -450,8 +450,25 @@ class SetupView(private val home: HomeScreen) : FrameLayout(home.ctx) {
         return tiles
     }
 
-    /** The app's banner, or its icon centred on its own colour, at thumbnail size. */
+    /** The app's banner, or its icon centred on its own colour (or glassy theme look), at thumbnail size. */
     private fun tileArt(a: AppEntry, w: Int, h: Int): Bitmap? {
+        if (prefs.glassLogos) {
+            val gArt = a.glassArt ?: a.art ?: return null
+            val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val c = Canvas(b)
+            val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = android.graphics.LinearGradient(
+                    0f, 0f, 0f, h.toFloat(),
+                    intArrayOf(0xFF14274E.toInt(), 0xFF0A1429.toInt(), 0xFF040812.toInt()),
+                    floatArrayOf(0f, 0.55f, 1f),
+                    android.graphics.Shader.TileMode.CLAMP
+                )
+            }
+            c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), bg)
+            val s = h * 0.60f
+            c.drawBitmap(gArt, null, RectF((w - s) / 2, (h - s) / 2, (w + s) / 2, (h + s) / 2), Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+            return b
+        }
         val art = a.art ?: return null
         if (a.isBanner) return art
         val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)

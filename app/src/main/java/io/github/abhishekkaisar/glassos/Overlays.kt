@@ -45,6 +45,7 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
     private val aboutRow = RowView(context, "About")
     private val uninstallRow = RowView(context, "Prepare to uninstall")
     private val soundRow = RowView(context, "Focus sounds")
+    private val glassLogosRow = RowView(context, "Glassy app logos")
     private val editRow = RowView(context, "Edit top row")
     private val bgRow = RowView(context, "Background").apply { isFocusable = false; isClickable = false }
     private val allRow = RowView(context, "Show all apps")
@@ -104,6 +105,7 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         list.addView(addTrackRow, rowLp())
         list.addView(keyRow, rowLp())
         list.addView(soundRow, rowLp())
+        list.addView(glassLogosRow, rowLp())
         list.addView(bgRow, rowLp())
         val bgLabel = TextView(context).apply {
             text = "Scene backdrop (behind Top Shelf)"
@@ -182,6 +184,10 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
             act.prefs.sound = !act.prefs.sound
             updateValues()
         }
+        glassLogosRow.onClick = {
+            act.setGlassLogos(!act.prefs.glassLogos)
+            updateValues()
+        }
         editRow.onClick = { close { act.enterEdit() } }
         allRow.onClick = { close { act.focusAllApps() } }
         replaceRow.onClick = {
@@ -199,6 +205,7 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
 
     private fun updateValues() {
         soundRow.valueView.text = if (act.prefs.sound) "On" else "Off"
+        glassLogosRow.valueView.text = if (act.prefs.glassLogos) "On (Theme)" else "Off (Default)"
         val hiddenCount = act.prefs.hidden.count { p -> HomeShare.apps?.any { it.pkg == p } ?: true }
         hiddenRow.valueView.text = if (hiddenCount == 0) "None" else "$hiddenCount"
         nameRow.valueView.text = act.prefs.name.ifEmpty { "Not set" }
@@ -243,7 +250,7 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         }
         act.loadThumbs(thumbs)
         val chosen = thumbs.firstOrNull { it.chosen } ?: thumbs.firstOrNull()
-        soundRow.nextFocusDownId = chosen?.id ?: View.NO_ID
+        glassLogosRow.nextFocusDownId = chosen?.id ?: View.NO_ID
         editRow.nextFocusUpId = chosen?.id ?: View.NO_ID
         if (chosen != null) thumbsScroll.post { thumbsScroll.scrollTo((chosen.left - dpi(18f)).coerceAtLeast(0), 0) }
     }

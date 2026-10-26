@@ -9,6 +9,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("sound", true)
         set(v) { sp.edit().putBoolean("sound", v).apply() }
 
+    /** When true, app tiles and logos use a frosted glass look that matches the background theme instead of default app colors. */
+    var glassLogos: Boolean
+        get() = sp.getBoolean("glassLogos", true)
+        set(v) { sp.edit().putBoolean("glassLogos", v).apply() }
+
     /**
      * Fallback background, shown when the Top Shelf has no title art: a built-in scene (scene:..., default),
      * the user's own photos in Pictures/Glass (hero:photos) or one image (file:...).
