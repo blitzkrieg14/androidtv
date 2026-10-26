@@ -13,9 +13,13 @@ import java.io.FileOutputStream
 class Wallpaper(val sharp: Bitmap, val blurred: Bitmap)
 
 object WallpaperStore {
-    private const val GEN = 10
+    private const val GEN = 11
     val scenes = listOf(
         "scene:navy" to "Navy to black",
+        "scene:eagles" to "Philadelphia Eagles",
+        "scene:capitals" to "Washington Capitals",
+        "scene:seahawks" to "Seattle Seahawks",
+        "scene:flames" to "Calgary Flames",
         "scene:desert" to "Night desert",
         "scene:ocean" to "Dusk ocean",
         "scene:aurora" to "Aurora",

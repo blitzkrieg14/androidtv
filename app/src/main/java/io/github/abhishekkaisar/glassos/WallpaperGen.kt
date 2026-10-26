@@ -27,6 +27,10 @@ object WallpaperGen {
         c.scale(w / W, h / H)
         when (scene) {
             "navy" -> navy(c)
+            "eagles" -> eagles(c)
+            "capitals" -> capitals(c)
+            "seahawks" -> seahawks(c)
+            "flames" -> flames(c)
             "ocean" -> ocean(c)
             "aurora" -> aurora(c, bmp)
             "dark" -> dark(c)
@@ -367,6 +371,101 @@ object WallpaperGen {
             intArrayOf(0xFF0B1D3F.toInt(), 0xFF071229.toInt(), 0xFF030813.toInt(), 0xFF000000.toInt()),
             floatArrayOf(0f, 0.42f, 0.78f, 1f)
         )
+    }
+
+    /** Philadelphia Eagles: Midnight Green (#004C54), Wing Silver (#A5ACAF), and Obsidian Black. */
+    private fun eagles(c: Canvas) {
+        vGrad(
+            c, 0f, H,
+            intArrayOf(0xFF004C54.toInt(), 0xFF00353B.toInt(), 0xFF001C20.toInt(), 0xFF020607.toInt()),
+            floatArrayOf(0f, 0.38f, 0.72f, 1f)
+        )
+        glow(c, W * 0.18f, H * 0.16f, 980f, 0xFF006E7A.toInt(), 0.52f)
+        glow(c, W * 0.84f, H * 0.22f, 760f, 0xFFA5ACAF.toInt(), 0.32f)
+        glow(c, W * 0.52f, H * 0.88f, 920f, 0xFF004C54.toInt(), 0.38f)
+        // Stylized metallic silver & midnight-green wing feather light streaks
+        val wing = paint()
+        for (i in 0 until 4) {
+            val yOff = i * 56f
+            wing.shader = LinearGradient(
+                W * 0.55f, H * 0.06f + yOff, W * 0.98f, H * 0.34f + yOff,
+                intArrayOf(0, alphaOf(0xFFA5ACAF.toInt(), 0.14f - i * 0.025f), 0),
+                floatArrayOf(0f, 0.5f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            val p = Path().apply {
+                moveTo(W * 0.52f, H * 0.12f + yOff)
+                quadTo(W * 0.76f, H * 0.04f + yOff, W * 1.02f, H * 0.20f + yOff)
+                lineTo(W * 1.02f, H * 0.24f + yOff)
+                quadTo(W * 0.75f, H * 0.09f + yOff, W * 0.52f, H * 0.15f + yOff)
+                close()
+            }
+            c.drawPath(p, wing)
+        }
+    }
+
+    /** Washington Capitals: Capitals Red (#C8102E), Washington Navy (#041E42), and Crisp Ice White. */
+    private fun capitals(c: Canvas) {
+        vGrad(
+            c, 0f, H,
+            intArrayOf(0xFF072554.toInt(), 0xFF041E42.toInt(), 0xFF031126.toInt(), 0xFF01050D.toInt()),
+            floatArrayOf(0f, 0.40f, 0.75f, 1f)
+        )
+        glow(c, W * 0.22f, H * 0.18f, 980f, 0xFFC8102E.toInt(), 0.50f)
+        glow(c, W * 0.82f, H * 0.28f, 840f, 0xFF9E0B22.toInt(), 0.36f)
+        glow(c, W * 0.50f, H * 0.85f, 940f, 0xFF0A2E63.toInt(), 0.45f)
+        glow(c, W * 0.50f, H * 0.12f, 520f, 0xFFFFFFFF.toInt(), 0.12f)
+        // Subtle red & white diagonal capital stripe accent
+        val stripe = paint()
+        stripe.shader = LinearGradient(
+            0f, H * 0.35f, W, H * 0.12f,
+            intArrayOf(0, alphaOf(0xFFC8102E.toInt(), 0.22f), alphaOf(Color.WHITE, 0.10f), 0),
+            floatArrayOf(0f, 0.45f, 0.65f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        val path = Path().apply {
+            moveTo(0f, H * 0.38f)
+            lineTo(W, H * 0.12f)
+            lineTo(W, H * 0.18f)
+            lineTo(0f, H * 0.44f)
+            close()
+        }
+        c.drawPath(path, stripe)
+    }
+
+    /** Seattle Seahawks: College Navy (#002244), Action Green (#69BE28), and Wolf Grey (#A5ACAF). */
+    private fun seahawks(c: Canvas) {
+        vGrad(
+            c, 0f, H,
+            intArrayOf(0xFF002B56.toInt(), 0xFF002244.toInt(), 0xFF001226.toInt(), 0xFF01060D.toInt()),
+            floatArrayOf(0f, 0.40f, 0.76f, 1f)
+        )
+        glow(c, W * 0.82f, H * 0.16f, 900f, 0xFF69BE28.toInt(), 0.42f)
+        glow(c, W * 0.18f, H * 0.24f, 960f, 0xFF003B73.toInt(), 0.55f)
+        glow(c, W * 0.55f, H * 0.88f, 820f, 0xFFA5ACAF.toInt(), 0.20f)
+        glow(c, W * 0.35f, H * 0.52f, 640f, 0xFF69BE28.toInt(), 0.16f)
+        // Action Green & Wolf Grey sleek horizon beam
+        val beam = paint()
+        beam.shader = LinearGradient(
+            0f, H * 0.22f, W, H * 0.22f,
+            intArrayOf(0, alphaOf(0xFF69BE28.toInt(), 0.24f), alphaOf(0xFFA5ACAF.toInt(), 0.14f), 0),
+            floatArrayOf(0f, 0.38f, 0.72f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        c.drawRect(0f, H * 0.19f, W, H * 0.23f, beam)
+    }
+
+    /** Calgary Flames: Flames Red (#D2001C), Flames Gold (#FAAF19), and Scorched Black. */
+    private fun flames(c: Canvas) {
+        vGrad(
+            c, 0f, H,
+            intArrayOf(0xFF6B000E.toInt(), 0xFF380007.toInt(), 0xFF170204.toInt(), 0xFF040001.toInt()),
+            floatArrayOf(0f, 0.38f, 0.74f, 1f)
+        )
+        glow(c, W * 0.24f, H * 0.18f, 980f, 0xFFD2001C.toInt(), 0.54f)
+        glow(c, W * 0.78f, H * 0.22f, 820f, 0xFFFAAF19.toInt(), 0.38f)
+        glow(c, W * 0.50f, H * 0.86f, 960f, 0xFFB80018.toInt(), 0.42f)
+        glow(c, W * 0.48f, H * 0.42f, 620f, 0xFFFF8800.toInt(), 0.22f)
     }
 
     private fun dark(c: Canvas) {

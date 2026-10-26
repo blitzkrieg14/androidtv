@@ -137,6 +137,13 @@ class TileView(ctx: Context, val cardW: Int, val cardH: Int, private val labelH:
         textAlign = Paint.Align.CENTER
         setShadowLayer(ctx.dp(4f), 0f, ctx.dp(1f), 0x80000000.toInt())
     }
+    private val glassLabelText = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = Fonts.medium
+        textSize = ctx.dp(11.8f)
+        color = 0xFFF0F7FF.toInt()
+        textAlign = Paint.Align.CENTER
+        setShadowLayer(ctx.dp(4f), 0f, ctx.dp(1f), 0xAA000000.toInt())
+    }
     private var glare = 0.3f
     private var glareAnim: ValueAnimator? = null
     private var longFired = false
@@ -306,11 +313,17 @@ class TileView(ctx: Context, val cardW: Int, val cardH: Int, private val labelH:
             glass.draw(c, this, card, radius)
             val gArt = a?.glassArt ?: a?.art
             if (gArt != null) {
-                val s = h * 0.58f
-                iconRect.set((w - s) / 2f, (h - s) / 2f, (w + s) / 2f, (h + s) / 2f)
+                val s = h * 0.46f
+                val cy = h * 0.37f
+                iconRect.set((w - s) / 2f, cy - s / 2f, (w + s) / 2f, cy + s / 2f)
                 iconPaint.alpha = (232 + (23 * f).toInt()).coerceIn(0, 255)
                 c.drawBitmap(gArt, null, iconRect, iconPaint)
                 iconPaint.alpha = 255
+            }
+            if (a != null && a.label.isNotEmpty()) {
+                glassLabelText.alpha = (218 + (37 * f).toInt()).coerceIn(0, 255)
+                val inCardLabel = TextUtils.ellipsize(a.label, glassLabelText, w - dp(16f), TextUtils.TruncateAt.END).toString()
+                c.drawText(inCardLabel, w / 2f, h * 0.85f, glassLabelText)
             }
         } else if (a != null && artPaint.shader != null) {
             c.drawRoundRect(card, radius, radius, artPaint)
@@ -362,7 +375,7 @@ class TileView(ctx: Context, val cardW: Int, val cardH: Int, private val labelH:
             c.drawPath(p, ring)
         }
 
-        if (a != null && labelH > 0 && labelAlpha > 0.004f) {
+        if (!glassLogos && a != null && labelH > 0 && labelAlpha > 0.004f) {
             text.alpha = ((0.72f + 0.28f * f) * labelAlpha * 255).toInt()
             // At most 1.1x the card: wider labels on the first column ran off the screen's left edge when focused.
             val label = TextUtils.ellipsize(a.label, text, w * 1.1f, TextUtils.TruncateAt.END).toString()
