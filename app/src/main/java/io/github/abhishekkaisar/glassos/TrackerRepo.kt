@@ -91,7 +91,7 @@ object TrackerRepo {
         private set
 
     private fun cacheFile(ctx: Context): File =
-        File(File(ctx.filesDir, "tracker").apply { mkdirs() }, "schedule_v5.json")
+        File(File(ctx.filesDir, "tracker").apply { mkdirs() }, "schedule_v6.json")
 
     /**
      * Performs an HTTPS GET for schedule JSON. If standard TLS fails due to emulator/TV clock skew
@@ -111,13 +111,26 @@ object TrackerRepo {
                 readTimeout = 20_000
                 for ((k, v) in mergedHeaders) setRequestProperty(k, v)
                 if (this is javax.net.ssl.HttpsURLConnection) {
-                    val tm = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
-                        override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
-                        override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
-                        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = emptyArray()
-                    })
+                    val tm = if (android.os.Build.VERSION.SDK_INT >= 24) {
+                        arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509ExtendedTrustManager() {
+                            override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                            override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                            override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = emptyArray()
+                            override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?, socket: java.net.Socket?) {}
+                            override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?, socket: java.net.Socket?) {}
+                            override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?, engine: javax.net.ssl.SSLEngine?) {}
+                            override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?, engine: javax.net.ssl.SSLEngine?) {}
+                        })
+                    } else {
+                        arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
+                            override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                            override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                            override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = emptyArray()
+                        })
+                    }
                     val sc = javax.net.ssl.SSLContext.getInstance("TLS").apply { init(null, tm, java.security.SecureRandom()) }
                     sslSocketFactory = sc.socketFactory
+                    hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
                 }
             }
             try {
