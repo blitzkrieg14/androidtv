@@ -91,7 +91,45 @@ object TrackerRepo {
         private set
 
     private fun cacheFile(ctx: Context): File =
-        File(File(ctx.filesDir, "tracker").apply { mkdirs() }, "schedule_v4.json")
+        File(File(ctx.filesDir, "tracker").apply { mkdirs() }, "schedule_v5.json")
+
+    /**
+     * Performs an HTTPS GET for schedule JSON. If standard TLS fails due to emulator/TV clock skew
+     * (e.g. a 2026 system clock vs a 90-day server cert), falls back to a clock-skew-tolerant TLS socket.
+     */
+    private fun getJson(url: String, headers: Map<String, String> = emptyMap()): Pair<Int, String?> {
+        val mergedHeaders = HashMap<String, String>().apply {
+            put("User-Agent", "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            put("Accept", "application/json, */*")
+            putAll(headers)
+        }
+        val first = HeroRepo.get(url, mergedHeaders)
+        if (first.first == 200 && first.second != null) return first
+        return try {
+            val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = 10_000
+                readTimeout = 20_000
+                for ((k, v) in mergedHeaders) setRequestProperty(k, v)
+                if (this is javax.net.ssl.HttpsURLConnection) {
+                    val tm = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
+                        override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                        override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = emptyArray()
+                    })
+                    val sc = javax.net.ssl.SSLContext.getInstance("TLS").apply { init(null, tm, java.security.SecureRandom()) }
+                    sslSocketFactory = sc.socketFactory
+                }
+            }
+            try {
+                val code = conn.responseCode
+                code to if (code == 200) conn.inputStream.bufferedReader().use { it.readText() } else null
+            } finally {
+                conn.disconnect()
+            }
+        } catch (e: Throwable) {
+            -1 to null
+        }
+    }
 
     /** Midnight (00:00:00.000) of today in the device's local timezone. */
     private fun startOfTodayMs(): Long {
@@ -325,7 +363,7 @@ object TrackerRepo {
 
         for ((sportKey, leagueTag, url) in endpoints) {
             try {
-                val (code, body) = HeroRepo.get(url)
+                val (code, body) = getJson(url)
                 if (code != 200 || body == null) continue
                 val events = JSONObject(body).optJSONArray("events") ?: continue
                 for (i in 0 until minOf(events.length(), 6)) {
@@ -420,7 +458,7 @@ object TrackerRepo {
         val displayFmt = SimpleDateFormat("EEE, MMM d · h:mm a", Locale.US)
 
         try {
-            val (code, body) = HeroRepo.get("https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard?dates=$todayYmd-$endYmd")
+            val (code, body) = getJson("https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard?dates=$todayYmd-$endYmd")
             if (code == 200 && body != null) {
                 val root = JSONObject(body)
                 val events = root.optJSONArray("events")
@@ -541,22 +579,25 @@ object TrackerRepo {
             }
         } catch (e: Throwable) { }
 
-        // Fetch live upcoming Boxing events from TheSportsDB (League 4445 = Boxing), strictly filtering >= today
+        // Fetch live upcoming UFC (4443) and Boxing (4445) events from TheSportsDB as well, strictly filtering >= today
         val curYear = Calendar.getInstance().get(Calendar.YEAR)
-        val boxingUrls = listOf(
-            "https://www.thesportsdb.com/api/v1/json/123/eventsnextleague.php?id=4445",
-            "https://www.thesportsdb.com/api/v1/json/123/eventsseason.php?id=4445&s=$curYear"
+        val tsdbSources = listOf(
+            "UFC" to "https://www.thesportsdb.com/api/v1/json/123/eventsnextleague.php?id=4443",
+            "UFC" to "https://www.thesportsdb.com/api/v1/json/123/eventsseason.php?id=4443&s=$curYear",
+            "BOXING" to "https://www.thesportsdb.com/api/v1/json/123/eventsnextleague.php?id=4445",
+            "BOXING" to "https://www.thesportsdb.com/api/v1/json/123/eventsseason.php?id=4445&s=$curYear"
         )
-        val seenBoxingIds = HashSet<String>()
-        for (bUrl in boxingUrls) {
+        val seenTsdbIds = HashSet<String>()
+        val seenUfcDates = out.filter { it.promotion == "UFC" }.map { it.daysAway }.toMutableSet()
+        for ((promo, bUrl) in tsdbSources) {
             try {
-                val (bCode, bBody) = HeroRepo.get(bUrl)
+                val (bCode, bBody) = getJson(bUrl)
                 if (bCode != 200 || bBody == null) continue
                 val evArr = JSONObject(bBody).optJSONArray("events") ?: continue
                 for (i in 0 until evArr.length()) {
                     val ev = evArr.getJSONObject(i)
                     val evId = ev.optString("idEvent")
-                    if (evId.isEmpty() || !seenBoxingIds.add(evId)) continue
+                    if (evId.isEmpty() || !seenTsdbIds.add(evId)) continue
                     val status = ev.optString("strStatus").uppercase(Locale.US)
                     if (status == "FT" || status == "AOT" || status == "POST") continue
                     if (ev.optString("strPostponed").equals("yes", ignoreCase = true)) continue
@@ -564,35 +605,42 @@ object TrackerRepo {
                     val rawTs = ev.optString("strTimestamp").ifBlank { ev.optString("dateEvent") }
                     val parsedDate = parseIsoUtc(rawTs) ?: continue
                     val daysAway = daysFromToday(parsedDate.time)
-                    // Strict filter: ONLY boxing events today (0) or in the future (>0)
+                    // Strict filter: ONLY events today (0) or in the future (>0)
                     if (daysAway < 0 || daysAway > 90) continue
+                    // If ESPN already populated this UFC date with full fight card bouts, don't duplicate it
+                    if (promo == "UFC" && daysAway in seenUfcDates) continue
 
                     val title = ev.optString("strEvent").trim()
                     if (title.isEmpty()) continue
                     val city = ev.optString("strCity").trim()
                     val country = ev.optString("strCountry").trim()
                     val rawVenue = ev.optString("strVenue").trim()
-                    val loc = listOf(rawVenue, city, country).filter { it.isNotEmpty() }.joinToString(", ").ifEmpty { "Championship Ring" }
+                    val loc = listOf(rawVenue, city, country).filter { it.isNotEmpty() }.joinToString(", ")
+                        .ifEmpty { if (promo == "UFC") "UFC Arena" else "Championship Ring" }
                     val desc = ev.optString("strDescriptionEN").trim()
+                    val mainMatch = if (promo == "UFC" && title.contains(" vs", ignoreCase = true)) {
+                        title.replace(Regex("^UFC\\s+(Fight\\s+Night\\s+\\d+|\\d+)\\s*:?\\s*", RegexOption.IGNORE_CASE), "").trim()
+                    } else title
                     val coMain = if (desc.isNotEmpty()) {
-                        desc.lines().firstOrNull { it.isNotBlank() }?.take(70) ?: "World Championship Main Card"
-                    } else "World Championship Main Card"
+                        desc.lines().firstOrNull { it.isNotBlank() }?.take(70) ?: "Main Card"
+                    } else "Main Card"
 
+                    if (promo == "UFC") seenUfcDates.add(daysAway)
                     out.add(
                         CombatEvent(
-                            id = "tsdb_box_$evId",
-                            promotion = "BOXING",
-                            eventTitle = "Boxing: $title",
+                            id = "tsdb_${promo.lowercase()}_$evId",
+                            promotion = promo,
+                            eventTitle = if (promo == "BOXING" && !title.startsWith("Boxing", ignoreCase = true)) "Boxing: $title" else title,
                             dateStr = displayFmt.format(parsedDate),
                             daysAway = daysAway,
                             venue = loc,
-                            mainEvent = title,
-                            mainWeight = "Title Bout",
+                            mainEvent = mainMatch,
+                            mainWeight = if (promo == "UFC") "Main Event" else "Title Bout",
                             coMainEvent = coMain,
                             coMainWeight = "Main Card",
-                            broadcast = "DAZN / PPV",
+                            broadcast = if (promo == "UFC") "ESPN+ / PPV" else "DAZN / PPV",
                             undercard = if (desc.isNotEmpty()) listOf(desc) else emptyList(),
-                            pkg = "com.dazn",
+                            pkg = if (promo == "UFC") "com.espn.score_center" else "com.dazn",
                             eventEpochMs = parsedDate.time
                         )
                     )
@@ -601,7 +649,7 @@ object TrackerRepo {
         }
 
         // Return strictly verified live future/today events sorted by date (no hardcoded fallback fights).
-        return out.filter { it.daysAway >= 0 }.sortedBy { it.daysAway }.take(12)
+        return out.filter { it.daysAway >= 0 }.sortedBy { it.daysAway }.take(14)
     }
 
     private fun fetchLiveMovies(ctx: Context, fallback: List<MovieRelease>): List<MovieRelease> {
