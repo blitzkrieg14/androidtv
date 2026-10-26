@@ -663,6 +663,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
     }
 
     private fun applyApps(list: List<AppEntry>) {
+        prefs.ensureDefaultHidden(list)
         apps = list
         val visible = visibleApps()
         val shown = visible.map { it.pkg }.toSet()
@@ -782,6 +783,8 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
         content.layoutParams = (content.layoutParams as FrameLayout.LayoutParams).apply {
             height = rowTop(rows.size) + rowH + ctx.dpi(120f)
         }
+        chevron.visibility = if (drawerPkgs.isEmpty()) View.GONE else View.VISIBLE
+        if (drawerPkgs.isEmpty() && currentRow > 0) scrollToRow(0)
         if (editMode) dockTiles.forEach { it.setJiggle(true) }
         if (settings.isOpen || appMenu.isOpen) return
         val target = rows.flatten().firstOrNull { it.app?.pkg == keep }

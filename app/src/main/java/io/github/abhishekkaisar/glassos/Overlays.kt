@@ -38,7 +38,7 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
     private val addTrackRow = RowView(context, "Add item to track")
     private val keyRow = RowView(context, "TMDB API key")
     private val appsRow = RowView(context, "Top row apps")
-    private val hiddenRow = RowView(context, "Hidden apps")
+    private val hiddenRow = RowView(context, "Activate / Hide apps")
     private val permsRow = RowView(context, "Permissions")
     private val setupRow = RowView(context, "Run setup again")
     private val updateRow = RowView(context, "Check for updates")
@@ -206,8 +206,10 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
     private fun updateValues() {
         soundRow.valueView.text = if (act.prefs.sound) "On" else "Off"
         glassLogosRow.valueView.text = if (act.prefs.glassLogos) "On (Theme)" else "Off (Default)"
+        val totalApps = HomeShare.apps?.size ?: 0
         val hiddenCount = act.prefs.hidden.count { p -> HomeShare.apps?.any { it.pkg == p } ?: true }
-        hiddenRow.valueView.text = if (hiddenCount == 0) "None" else "$hiddenCount"
+        val activeCount = (totalApps - hiddenCount).coerceAtLeast(0)
+        hiddenRow.valueView.text = if (totalApps > 0) "$activeCount active" else if (hiddenCount == 0) "All active" else "$hiddenCount hidden"
         nameRow.valueView.text = act.prefs.name.ifEmpty { "Not set" }
         countryRow.valueView.text = act.prefs.country.ifEmpty { "Not set" }.let { c -> if (c.length == 2) java.util.Locale("", c).displayCountry else c }
         shelfRow.valueView.text = HeroRepo.sourceLabel(act.prefs.topShelf)

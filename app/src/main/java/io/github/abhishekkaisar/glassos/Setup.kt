@@ -153,7 +153,13 @@ class SetupView(private val home: HomeScreen) : FrameLayout(home.ctx) {
                 home.reloadProfile()
             }
             Step.COUNTRY -> if (country != prefs.country) { prefs.country = country; if (single) home.refetchTopShelf() }
-            Step.APPS -> if (picked.isNotEmpty()) { prefs.dock = picked.toList(); home.reloadProfile(); if (single) home.refetchTopShelf() }
+            Step.APPS -> if (picked.isNotEmpty()) {
+                prefs.dock = picked.toList()
+                prefs.hidden = prefs.hidden - picked.toSet()
+                home.reloadDock()
+                home.reloadProfile()
+                if (single) home.refetchTopShelf()
+            }
             Step.TMDB_KEY -> { prefs.tmdbKey = keyText; home.refetchTopShelf() }
             Step.HIDDEN -> if (hidden != prefs.hidden) { prefs.hidden = hidden.toSet(); home.reloadDock() }
             else -> {}
@@ -378,7 +384,7 @@ class SetupView(private val home: HomeScreen) : FrameLayout(home.ctx) {
     private fun appsStep() {
         title.text = "Your top row"
         subtitle.text = "Choose up to ${HomeScreen.COLS} apps for the shelf. You can change them later."
-        val apps = allApps().filter { it.pkg !in hidden }
+        val apps = allApps()
         if (picked.isEmpty()) picked.addAll(AppRepo.defaultDock(apps))
         picked.retainAll(apps.map { it.pkg }.toSet())
         fun refreshCount() { subtitle.text = "Choose up to ${HomeScreen.COLS} apps for the shelf (${picked.size} chosen). You can change them later." }
@@ -396,29 +402,31 @@ class SetupView(private val home: HomeScreen) : FrameLayout(home.ctx) {
 
     /** Settings > Hidden apps: ticked apps stay off the drawer, the top row and the top row picker. */
     private fun hiddenStep() {
-        title.text = "Hidden apps"
+        title.text = "Activate / Hide apps"
         val apps = allApps()
         fun refreshCount() {
-            subtitle.text = if (hidden.isEmpty()) "Choose apps to hide from Home. They still open from the Top Shelf."
-                else "${hidden.size} hidden. Choose an app again to show it on Home."
+            val activeCount = apps.count { it.pkg !in hidden }; subtitle.text = "$activeCount active on Home · ${hidden.size} hidden. Select an app to activate (✓) or hide it."
+
         }
         refreshCount()
         // Hidden apps first, so the ones to bring back are at hand.
-        val sorted = apps.filter { it.pkg in hidden } + apps.filter { it.pkg !in hidden }
-        val tiles = appGrid(sorted, { it in hidden }) { a, t ->
+        val sorted = apps.filter { it.pkg !in hidden } + apps.filter { it.pkg in hidden }
+        val tiles = appGrid(sorted, { it !in hidden }) { a, t ->
             if (a.pkg !in hidden && apps.count { it.pkg !in hidden } <= 1) {
                 Toast.makeText(context, "Keep at least one app on Home", Toast.LENGTH_SHORT).show()
                 return@appGrid
             }
             if (!hidden.remove(a.pkg)) hidden.add(a.pkg)
-            t.chosen = a.pkg in hidden
+            t.chosen = a.pkg !in hidden
             refreshCount()
         }
         navButton("Done", primary = true) { next() }
         tiles.firstOrNull()?.requestFocus()
     }
 
-    private fun allApps(): List<AppEntry> = HomeShare.apps ?: AppRepo.load(context).also { HomeShare.apps = it }
+    private fun allApps(): List<AppEntry> = (HomeShare.apps ?: AppRepo.load(context).also { HomeShare.apps = it }).also {
+        prefs.ensureDefaultHidden(it)
+    }
 
     /** A scrolling grid of app thumbnails, five a row; [chosen] marks a tile, [click] runs on OK. */
     private fun appGrid(apps: List<AppEntry>, chosen: (String) -> Boolean, click: (AppEntry, ThumbView) -> Unit): List<ThumbView> {

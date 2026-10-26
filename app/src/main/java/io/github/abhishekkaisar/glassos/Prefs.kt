@@ -94,10 +94,26 @@ class Prefs(ctx: Context) {
         get() = sp.getString("order", null)?.split(',')?.filter { it.isNotBlank() }
         set(v) { sp.edit().putString("order", v?.joinToString(",")).apply() }
 
-    /** Apps left out of the drawer, the top row and the top row picker (Settings > Hidden apps). */
+    /** Apps left out of the drawer, the top row and the top row picker (Settings > Activate / Hide apps). */
     var hidden: Set<String>
         get() = sp.getString("hidden", null)?.split(',')?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
         set(v) { sp.edit().putString("hidden", v.joinToString(",")).apply() }
+
+    /** True once the default hidden set (all apps except the top 6 dock apps) has been initialized. */
+    var defaultHiddenInitialized: Boolean
+        get() = sp.getBoolean("defaultHiddenInit_v1", false)
+        set(v) { sp.edit().putBoolean("defaultHiddenInit_v1", v).apply() }
+
+    /** Ensures that by default all apps besides the top 6 dock apps are hidden until activated in Settings. */
+    fun ensureDefaultHidden(apps: List<AppEntry>) {
+        if (defaultHiddenInitialized || apps.isEmpty()) return
+        val savedDock = dock?.filter { p -> apps.any { it.pkg == p } }?.distinct()?.take(HomeScreen.COLS)
+        val top6 = if (!savedDock.isNullOrEmpty()) savedDock else AppRepo.defaultDock(apps, HomeScreen.COLS)
+        dock = top6
+        val topSet = top6.toSet()
+        hidden = apps.map { it.pkg }.filter { it !in topSet }.toSet()
+        defaultHiddenInitialized = true
+    }
 
     var name: String
         get() = sp.getString("name", "") ?: ""
