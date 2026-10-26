@@ -42,8 +42,8 @@ class Loaded(val slide: Slide, val sharp: Bitmap, val blurred: Bitmap, val logo:
 }
 
 /**
- * Sources for the rotating Top Shelf: trending titles from TMDB (default), the Apple TV app's featured titles
- * (unofficial, off by default) or the built-in scenes. Titles are cached on disk and refreshed at most every
+ * Sources for the Top Shelf: Schedule & Tracker (default), trending titles from TMDB, the Apple TV app's featured
+ * titles (unofficial, off by default) or the built-in scenes. Titles are cached on disk and refreshed at most every
  * 6 hours. The user's own photos (copied to private storage) are one of the fallback choices.
  */
 object HeroRepo {
@@ -51,10 +51,16 @@ object HeroRepo {
     const val PHOTOS = "hero:photos"
     val APPLE_TV_PKGS = listOf("com.apple.atve.amazon.appletv", "com.apple.atve.androidtv.appletv")
 
+    const val SRC_TRACKER = "tracker"
     const val SRC_TMDB = "tmdb"
     const val SRC_APPLE = "apple"
     const val SRC_SCENES = "scenes"
-    val SOURCES = listOf(SRC_TMDB to "TMDB", SRC_APPLE to "Apple TV (unofficial)", SRC_SCENES to "Built-in scenes")
+    val SOURCES = listOf(
+        SRC_TRACKER to "Schedule & Tracker",
+        SRC_TMDB to "TMDB Trending",
+        SRC_APPLE to "Apple TV (unofficial)",
+        SRC_SCENES to "Built-in scenes"
+    )
     fun sourceLabel(id: String) = SOURCES.firstOrNull { it.first == id }?.second ?: id
 
     private const val REFRESH_MS = 6 * 3600_000L
@@ -98,7 +104,7 @@ object HeroRepo {
 
     /** Titles from the on-disk cache (works offline). */
     fun cachedTitles(ctx: Context, src: String): List<Slide> {
-        if (src == SRC_SCENES) return emptyList()
+        if (src == SRC_SCENES || src == SRC_TRACKER) return emptyList()
         val f = File(dir(ctx, src), "titles.json")
         if (!f.exists()) return emptyList()
         return try {
@@ -119,7 +125,7 @@ object HeroRepo {
     }
 
     fun isStale(ctx: Context, src: String): Boolean {
-        if (src == SRC_SCENES) return false
+        if (src == SRC_SCENES || src == SRC_TRACKER) return false
         val d = dir(ctx, src)
         val f = File(d, "titles.json")
         val attempt = File(d, "attempt").lastModified()
@@ -137,7 +143,7 @@ object HeroRepo {
 
     /** Fetches [src]'s current titles and their art. Returns true when the cache changed. Call off the UI thread. */
     fun refresh(ctx: Context, src: String): Boolean {
-        if (src == SRC_SCENES) return false
+        if (src == SRC_SCENES || src == SRC_TRACKER) return false
         val d = dir(ctx, src)
         try { File(d, "attempt").writeText(System.currentTimeMillis().toString()) } catch (e: Throwable) { }
         val items = if (src == SRC_TMDB) Tmdb.fetch(ctx) else appleItems(d) ?: return false

@@ -47,7 +47,7 @@ object HomeShare {
 }
 
 /**
- * The Glass home: the rotating Top Shelf, the dock shelf, the app drawer, the user pill and Settings.
+ * The Glass home: the Top Shelf (Schedule & Tracker or rotating art), the dock shelf, the app drawer, the user pill and Settings.
  * One instance lives in MainActivity; a second, short-lived one is shown in an overlay window right after
  * the Home key (see [HomeOverlay]). Both share the decoded art and app icons through [HomeShare].
  */
@@ -56,6 +56,10 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
     lateinit var root: FrameLayout
         private set
     lateinit var hero: HeroView
+        private set
+    lateinit var scheduleView: TopShelfScheduleView
+        private set
+    lateinit var trackerModal: TrackerModal
         private set
     private lateinit var home: FrameLayout
     private lateinit var scrim: View
@@ -101,6 +105,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
         set(v) { field = v; updateHeroRunning() }
     private var released = false
     private val refreshing = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val trackerRefreshing = java.util.concurrent.atomic.AtomicBoolean(false)
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val sound get() = HomeShare.sound(ctx)
@@ -113,25 +118,31 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
             shelf.invalidate()
             gear.invalidate()
             chevron.invalidate()
+            if (::scheduleView.isInitialized && scheduleView.visibility == View.VISIBLE) scheduleView.invalidateGlass()
             if (scrim.alpha > 0f) scrim.invalidate()
             if (settings.isOpen) invalidateDeep(settings.panel)
             if (cc.isOpen) invalidateDeep(cc.panel)
             if (setup.isOpen) invalidateDeep(setup.panel)
             if (appMenu.isOpen) invalidateDeep(appMenu.panel)
+            if (::trackerModal.isInitialized && trackerModal.isOpen) invalidateDeep(trackerModal.panel)
             if (movePill.visibility == View.VISIBLE) movePill.invalidate()
         }
     }
+
+    val isTrackerMode: Boolean get() = prefs.topShelf == HeroRepo.SRC_TRACKER
 
     init {
         Backdrop.addListener(backdropListener)
         Backdrop.addFrameListener(frameListener)
         buildUi()
+        syncTopShelfMode()
         worker.execute { HomeShare.ensureSound(ctx) }
         val seedHero = seed?.hero
         if (seedHero != null && seedHero.slides.isNotEmpty()) hero.adopt(seedHero) else setWallpaper(prefs.scene, save = false)
         HomeShare.avatar?.let { gear.avatar = it }
         val cached = HomeShare.apps
         if (cached != null) applyApps(cached) else loadApps()
+        refreshTracker(force = false)
     }
 
     fun release() {
@@ -175,7 +186,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
         // No background here: the hero paints the night colour itself only while it has no art, so the full-screen
         // art is not drawn over a full-screen fill every frame (overdraw on a fill-rate bound GPU).
         root = KeyRoot(ctx).apply { clipChildren = false }
-        // Rotating Top Shelf behind everything (aerials, Apple TV titles, or one static background).
+        // Rotating Top Shelf behind everything (ambient scene backdrop for Tracker, or TMDB / Apple TV titles).
         hero = HeroView(ctx) { s -> HeroRepo.load(ctx, s, sw, sh) }.apply {
             id = View.generateViewId()
             shelfTop = (row0Top - shelfPadV).toFloat()
@@ -193,8 +204,22 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
         home = FrameLayout(ctx).apply { clipChildren = false; clipToPadding = false }
         root.addView(home, FrameLayout.LayoutParams(-1, -1))
 
-        header = FrameLayout(ctx).apply { clipChildren = false }
+        header = FrameLayout(ctx).apply { clipChildren = false; clipToPadding = false }
         home.addView(header, FrameLayout.LayoutParams(-1, -1))
+
+        // Top Shelf Schedule & Tracker panel sits inside header so it fades out cleanly when scrolling down into the app drawer.
+        val schedMarginH = sw * 32 / 1920
+        val schedTop = sh * 36 / 1080
+        val schedBottom = row0Top - shelfPadV - ctx.dpi(24f)
+        val schedH = (schedBottom - schedTop).coerceAtLeast(ctx.dpi(220f))
+        scheduleView = TopShelfScheduleView(this).apply {
+            id = View.generateViewId()
+        }
+        header.addView(scheduleView, FrameLayout.LayoutParams(sw - 2 * schedMarginH, schedH, Gravity.TOP).apply {
+            leftMargin = schedMarginH
+            topMargin = schedTop
+        })
+
         // tvOS keeps the Top Shelf clean: no big clock, the time lives in the user pill.
         gear = UserPill(ctx).apply {
             id = View.generateViewId()
@@ -204,7 +229,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
             onLongPress = { openSettings() }
         }
         header.addView(gear, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
-            rightMargin = sw * 60 / 1920; topMargin = sh * 48 / 1080
+            rightMargin = sw * 60 / 1920; topMargin = sh * 36 / 1080
         })
         hero.nextFocusUpId = gear.id
         updateTime()
@@ -274,6 +299,8 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
         root.addView(setup, FrameLayout.LayoutParams(-1, -1))
         appMenu = AppMenu(this)
         root.addView(appMenu, FrameLayout.LayoutParams(-1, -1))
+        trackerModal = TrackerModal(this)
+        root.addView(trackerModal, FrameLayout.LayoutParams(-1, -1))
 
         root.viewTreeObserver.addOnGlobalFocusChangeListener { old, new ->
             // Only a key moves focus audibly. A change no key caused (the app list reloaded, a window came back)
@@ -286,14 +313,53 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
                 val r = (new.tag as? Int) ?: 0
                 if (r == 0) lastDockIndex = dockTiles.indexOf(new).coerceAtLeast(0)
                 scrollToRow(r)
-            } else if (new === gear || new === hero) scrollToRow(0)
+            } else if (new === gear || new === hero || (new != null && isInsideSchedule(new))) {
+                scrollToRow(0)
+            }
         }
         root.viewTreeObserver.addOnGlobalLayoutListener { invalidateDeep(root) }
+    }
+
+    private fun isInsideSchedule(v: View): Boolean {
+        if (!::scheduleView.isInitialized) return false
+        var cur: View? = v
+        while (cur != null) {
+            if (cur === scheduleView) return true
+            cur = cur.parent as? View
+        }
+        return false
+    }
+
+    private fun syncTopShelfMode() {
+        if (!::scheduleView.isInitialized) return
+        val tracker = isTrackerMode
+        scheduleView.visibility = if (tracker) View.VISIBLE else View.GONE
+        scheduleView.descendantFocusability = if (tracker && currentRow == 0) ViewGroup.FOCUS_AFTER_DESCENDANTS else ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        hero.isFocusable = !tracker
+    }
+
+    /** Refreshes the Schedule & Tracker live feeds (ESPN today's sports, UFC/Boxing this month, upcoming movies). */
+    fun refreshTracker(force: Boolean = false) {
+        if (!trackerRefreshing.compareAndSet(false, true)) return
+        Thread {
+            try {
+                val snap = TrackerRepo.refreshLive(ctx, force = force)
+                ui {
+                    if (::scheduleView.isInitialized) scheduleView.setSnapshot(snap)
+                }
+            } catch (e: Throwable) {
+            } finally {
+                trackerRefreshing.set(false)
+            }
+        }.apply { priority = Thread.MIN_PRIORITY }.start()
     }
 
     private fun scrollToRow(r: Int) {
         if (r == currentRow) return
         currentRow = r
+        if (::scheduleView.isInitialized && isTrackerMode) {
+            scheduleView.descendantFocusability = if (r == 0) ViewGroup.FOCUS_AFTER_DESCENDANTS else ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        }
         val target = if (r == 0) 0f else -(rowTop(r) - sh * 0.30f)
         val instant = FocusAnim.forceInstant
         if (instant) {
@@ -347,8 +413,9 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
     /** The hero rotates only while the home row is on screen, nothing covers it and it is not focused. */
     fun updateHeroRunning() {
         if (!::hero.isInitialized || released) return
+        val modalOpen = ::trackerModal.isInitialized && trackerModal.isOpen
         hero.setRunning(resumed && currentRow == 0 && !settings.isOpen && !cc.isOpen && !setup.isOpen && !hero.isFocused && !editMode &&
-            movingPkg == null && !appMenu.isOpen)
+            movingPkg == null && !appMenu.isOpen && !modalOpen)
     }
 
     /**
@@ -439,13 +506,16 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
     /** Switches the Top Shelf source and reloads it (fetching at once when the cache is stale). */
     fun setTopShelf(src: String) {
         prefs.topShelf = src
+        syncTopShelfMode()
         setWallpaper(prefs.scene, save = false)
+        if (src == HeroRepo.SRC_TRACKER) refreshTracker(force = false)
     }
 
     /** Refetches the Top Shelf now (after a new country, key or favourite apps). */
     fun refetchTopShelf() {
         HeroRepo.invalidate(ctx, prefs.topShelf)
         setWallpaper(prefs.scene, save = false)
+        if (isTrackerMode) refreshTracker(force = true)
     }
 
     /** Top Shelf titles (live or cached); without any, the fallback: a scene, the user's photos or an image, then the desert. */
@@ -484,6 +554,32 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
         if (::setup.isInitialized) setup.onReturned()
         updateTime()
         if (!worker.isShutdown) worker.execute { refreshTitles(prefs.scene, wallToken) }
+        if (isTrackerMode) refreshTracker(force = false)
+        checkForAppUpdate(manual = false)
+    }
+
+    /** Checks github.com/blitzkrieg14/androidtv/releases for a newer APK and prompts to update if found. */
+    fun checkForAppUpdate(manual: Boolean = false) {
+        if (manual) {
+            Toast.makeText(ctx, "Checking ${AppUpdater.REPO} for updates…", Toast.LENGTH_SHORT).show()
+        }
+        AppUpdater.checkForUpdates(ctx, force = manual) { info, err ->
+            if (released) return@checkForUpdates
+            if (info != null) {
+                if (::settings.isInitialized && settings.isOpen) {
+                    settings.close(instant = true) {
+                        if (::trackerModal.isInitialized) trackerModal.openAppUpdate(info)
+                    }
+                } else if (::trackerModal.isInitialized && !trackerModal.isOpen && !setup.isOpen && !cc.isOpen) {
+                    trackerModal.openAppUpdate(info)
+                } else {
+                    Toast.makeText(ctx, "Update ${info.tagName} available in Settings!", Toast.LENGTH_LONG).show()
+                }
+            } else if (manual) {
+                val msg = if (err != null) "Update check: $err" else "Up to date (v${BuildConfig.VERSION_NAME})"
+                Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     fun updateTime() {
@@ -905,6 +1001,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
     /** Ends move mode and the app menu (another panel is opening, or the home is being reset). */
     private fun leaveMove() {
         if (appMenu.isOpen) appMenu.close()
+        if (::trackerModal.isInitialized && trackerModal.isOpen) trackerModal.close()
         if (movingPkg != null) cancelMove()
     }
 
@@ -915,10 +1012,16 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
 
     private fun blockHome(block: Boolean) {
         home.descendantFocusability = if (block) ViewGroup.FOCUS_BLOCK_DESCENDANTS else ViewGroup.FOCUS_AFTER_DESCENDANTS
-        hero.isFocusable = !block
+        hero.isFocusable = !block && !isTrackerMode
+    }
+
+    fun setHomeBlockedForModal(block: Boolean) {
+        blockHome(block)
+        updateHeroRunning()
     }
 
     fun focusDock() {
+        if (::scheduleView.isInitialized && scheduleView.activeColumn >= 0) scheduleView.exitActiveColumn()
         if (dockTiles.isNotEmpty()) dockTiles[lastDockIndex.coerceIn(0, dockTiles.size - 1)].requestFocus()
         else gear.requestFocus()
     }
@@ -1052,7 +1155,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
 
     fun state(): HomeState {
         val f = if (cc.isOpen) cc.returnFocus else focused()
-        return HomeState((f as? TileView)?.app?.pkg, f === gear, f === hero, lastDockIndex, settings.isOpen, cc.isOpen)
+        return HomeState((f as? TileView)?.app?.pkg, f === gear, f === hero || (f != null && isInsideSchedule(f)), lastDockIndex, settings.isOpen, cc.isOpen)
     }
 
     /** Puts focus, drawer scroll and the shown slide where [s] and [from] had them, with no animation. */
@@ -1072,6 +1175,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
                 when {
                     t != null -> t.requestFocus()
                     s.focusGear -> gear.requestFocus()
+                    s.focusHero && isTrackerMode -> scheduleView.requestDefaultFocus()
                     s.focusHero && hero.isFocusable -> hero.requestFocus()
                     else -> focusDock()
                 }
@@ -1105,7 +1209,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
             if (e.repeatCount > 0) return true
             eatOkUp = false
         }
-        if (settings.isOpen || cc.isOpen || appMenu.isOpen) return false
+        if (settings.isOpen || cc.isOpen || appMenu.isOpen || (::trackerModal.isInitialized && trackerModal.isOpen)) return false
         val focusTile = focused() as? TileView
         if (movingPkg != null) {
             // The hold that started the move keeps repeating until OK is let go: only a new press drops.
@@ -1151,10 +1255,14 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
                 KeyEvent.KEYCODE_DPAD_UP -> if (r >= 1) {
                     val prev = rows[r - 1]
                     if (prev.isNotEmpty()) { prev[col.coerceIn(0, prev.size - 1)].requestFocus(View.FOCUS_UP); return true }
+                } else if (r == 0 && isTrackerMode) {
+                    scheduleView.requestDefaultFocus()
+                    return true
                 }
             }
         } else if (down && focused() === gear && code == KeyEvent.KEYCODE_DPAD_DOWN) {
-            focusDock(); return true
+            if (isTrackerMode) scheduleView.requestDefaultFocus() else focusDock()
+            return true
         }
         return false
     }
@@ -1162,6 +1270,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
     /** Menu opens Control Center anywhere on the home; while an app is moving it opens the app's options. */
     private fun onMenu() {
         when {
+            ::trackerModal.isInitialized && trackerModal.isOpen -> trackerModal.close()
             cc.isOpen -> cc.close()
             settings.isOpen -> settings.close()
             appMenu.isOpen -> appMenu.close()
@@ -1173,6 +1282,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
 
     fun onBack() {
         when {
+            ::trackerModal.isInitialized && trackerModal.isOpen -> trackerModal.close()
             setup.isOpen -> setup.back()
             cc.isOpen -> cc.back()
             settings.isOpen -> settings.close()
@@ -1180,6 +1290,8 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
             movingPkg != null -> cancelMove()
             editMode -> exitEdit()
             currentRow > 0 -> focusDock()
+            ::scheduleView.isInitialized && scheduleView.exitActiveColumn() -> {}
+            focused()?.let { isInsideSchedule(it) } == true -> focusDock()
             else -> { /* Home stays put. */ }
         }
     }
@@ -1187,10 +1299,12 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
     /** Home pressed again while this home is shown: like tvOS, close what is open and keep focus. */
     fun onHomeAgain(fromWatcher: Boolean) {
         if (setup.isOpen) return
-        if (fromWatcher && !settings.isOpen && !cc.isOpen && !editMode && movingPkg == null && !appMenu.isOpen) {
+        val modalOpen = ::trackerModal.isInitialized && trackerModal.isOpen
+        if (fromWatcher && !settings.isOpen && !cc.isOpen && !editMode && movingPkg == null && !appMenu.isOpen && !modalOpen) {
             if (focused() == null) focusDock()
             return
         }
+        if (modalOpen) trackerModal.close()
         if (cc.isOpen) cc.close(instant = true)
         if (settings.isOpen) settings.close()
         leaveMove()

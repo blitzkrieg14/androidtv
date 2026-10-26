@@ -33,11 +33,15 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
     private val photoRow = RowView(context, "Profile photo")
     private val countryRow = RowView(context, "Country")
     private val shelfRow = RowView(context, "Top Shelf")
+    private val spoilersRow = RowView(context, "No spoilers (Sports & UFC)")
+    private val sportsRow = RowView(context, "Today's sports filter")
+    private val addTrackRow = RowView(context, "Add item to track")
     private val keyRow = RowView(context, "TMDB API key")
     private val appsRow = RowView(context, "Top row apps")
     private val hiddenRow = RowView(context, "Hidden apps")
     private val permsRow = RowView(context, "Permissions")
     private val setupRow = RowView(context, "Run setup again")
+    private val updateRow = RowView(context, "Check for updates")
     private val aboutRow = RowView(context, "About")
     private val uninstallRow = RowView(context, "Prepare to uninstall")
     private val soundRow = RowView(context, "Focus sounds")
@@ -95,11 +99,14 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         list.addView(photoRow, rowLp())
         list.addView(countryRow, rowLp())
         list.addView(shelfRow, rowLp())
+        list.addView(spoilersRow, rowLp())
+        list.addView(sportsRow, rowLp())
+        list.addView(addTrackRow, rowLp())
         list.addView(keyRow, rowLp())
         list.addView(soundRow, rowLp())
         list.addView(bgRow, rowLp())
         val bgLabel = TextView(context).apply {
-            text = "When Top Shelf art is unavailable"
+            text = "Scene backdrop (behind Top Shelf)"
             textSize = 15f
             typeface = Fonts.medium
             setTextColor(0x99FFFFFF.toInt())
@@ -123,6 +130,7 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         if (Platform.stockHome(context) != null) list.addView(fireHomeRow, rowLp())
         list.addView(setupRow, rowLp())
         list.addView(uninstallRow, rowLp())
+        list.addView(updateRow, rowLp())
         list.addView(aboutRow, rowLp())
 
         fun step(row: View, s: SetupView.Step) { resumeRow = row; act.openSetup(s, single = true) }
@@ -135,7 +143,25 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         permsRow.onClick = { step(permsRow, SetupView.Step.PERMISSIONS) }
         homeAppRow.onClick = { step(homeAppRow, SetupView.Step.HOME) }
         setupRow.onClick = { resumeRow = setupRow; act.openSetup() }
+        updateRow.onClick = { act.checkForAppUpdate(manual = true) }
         aboutRow.onClick = { step(aboutRow, SetupView.Step.ABOUT) }
+        spoilersRow.onClick = {
+            act.prefs.noSpoilers = !act.prefs.noSpoilers
+            act.scheduleView.renderAll()
+            updateValues()
+        }
+        sportsRow.onClick = {
+            close(instant = true) {
+                act.trackerModal.openSportsFilter { act.scheduleView.renderAll() }
+            }
+        }
+        addTrackRow.onClick = {
+            close(instant = true) {
+                act.trackerModal.openAddCustom {
+                    act.scheduleView.setSnapshot(TrackerRepo.loadImmediate(context))
+                }
+            }
+        }
         // Device admin blocks uninstalling; an app may always remove its own admin.
         uninstallRow.onClick = {
             Power.removeAdmin(context)
@@ -164,7 +190,7 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         }
         fireSettingsRow.onClick = { close { act.openFireSettings() } }
         fireHomeRow.onClick = { close { act.openAmazonHome() } }
-        for (r in listOf(fireSettingsRow, fireHomeRow, photoRow, appsRow, setupRow, aboutRow)) { r.valueView.text = "›"; r.valueView.textSize = 24f }
+        for (r in listOf(fireSettingsRow, fireHomeRow, photoRow, appsRow, setupRow, aboutRow, addTrackRow)) { r.valueView.text = "›"; r.valueView.textSize = 24f }
         allRow.valueView.text = "›"
         editRow.valueView.text = "›"
         allRow.valueView.textSize = 24f
@@ -178,6 +204,9 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         nameRow.valueView.text = act.prefs.name.ifEmpty { "Not set" }
         countryRow.valueView.text = act.prefs.country.ifEmpty { "Not set" }.let { c -> if (c.length == 2) java.util.Locale("", c).displayCountry else c }
         shelfRow.valueView.text = HeroRepo.sourceLabel(act.prefs.topShelf)
+        spoilersRow.valueView.text = if (act.prefs.noSpoilers) "On" else "Off"
+        val selSports = act.prefs.selectedSports
+        sportsRow.valueView.text = if (selSports.size >= Prefs.ALL_SPORTS.size) "All (${selSports.size})" else "${selSports.size} selected"
         keyRow.valueView.text = when {
             act.prefs.tmdbKey.isNotEmpty() -> "Your key"
             BuildConfig.TMDB_API_KEY.isNotEmpty() -> "Built in"
@@ -187,6 +216,8 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         bgRow.valueView.text = WallpaperStore.label(act.prefs.scene)
         replaceRow.valueView.text = if (act.prefs.replaceHome) "On" else "Off"
         homeAppRow.valueView.text = if (Platform.isDefaultHome(context)) "GlassOS" else "Not GlassOS"
+        val upd = AppUpdater.latestUpdate
+        updateRow.valueView.text = if (upd != null) "New: ${upd.tagName}" else "v${BuildConfig.VERSION_NAME}"
     }
 
     fun refreshThumbs() {
