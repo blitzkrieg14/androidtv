@@ -71,7 +71,9 @@ data class CombatEvent(
     /** Optional live/post results summary hidden when No Spoilers is enabled. */
     val resultSummary: String = "",
     val pkg: String? = null,
-    val isCustom: Boolean = false
+    val isCustom: Boolean = false,
+    /** Exact event timestamp (epoch ms) used to verify the fight is today or in the future. */
+    val eventEpochMs: Long = 0L
 )
 
 class TrackerSnapshot(
@@ -89,7 +91,7 @@ object TrackerRepo {
         private set
 
     private fun cacheFile(ctx: Context): File =
-        File(File(ctx.filesDir, "tracker").apply { mkdirs() }, "schedule_v3.json")
+        File(File(ctx.filesDir, "tracker").apply { mkdirs() }, "schedule_v4.json")
 
     /** Midnight (00:00:00.000) of today in the device's local timezone. */
     private fun startOfTodayMs(): Long {
@@ -123,12 +125,13 @@ object TrackerRepo {
         val formats = arrayOf(
             "yyyy-MM-dd'T'HH:mm'Z'",
             "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            "yyyy-MM-dd'T'HH:mm:ss",
             "yyyy-MM-dd"
         )
         for (pattern in formats) {
             try {
                 val fmt = SimpleDateFormat(pattern, Locale.US).apply {
-                    if (pattern.endsWith("'Z'")) timeZone = TimeZone.getTimeZone("UTC")
+                    if (pattern.contains("'T'")) timeZone = TimeZone.getTimeZone("UTC")
                 }
                 val d = fmt.parse(raw)
                 if (d != null) return d
@@ -474,7 +477,8 @@ object TrackerRepo {
                                     coMainWeight = coWt,
                                     broadcast = broadcast,
                                     undercard = under,
-                                    pkg = "com.espn.score_center"
+                                    pkg = "com.espn.score_center",
+                                    eventEpochMs = parsedDate.time
                                 )
                             )
                         } else {
@@ -493,7 +497,8 @@ object TrackerRepo {
                                     coMainEvent = "Co-Main Event TBA",
                                     coMainWeight = "Main Card",
                                     broadcast = "ESPN+ / PPV",
-                                    pkg = "com.espn.score_center"
+                                    pkg = "com.espn.score_center",
+                                    eventEpochMs = parsedDate.time
                                 )
                             )
                         }
@@ -527,7 +532,8 @@ object TrackerRepo {
                                 coMainEvent = "Co-Main Event TBA",
                                 coMainWeight = "Co-Main Card",
                                 broadcast = "ESPN+ / PPV",
-                                pkg = "com.espn.score_center"
+                                pkg = "com.espn.score_center",
+                                eventEpochMs = parsed.time
                             )
                         )
                     }
@@ -535,11 +541,67 @@ object TrackerRepo {
             }
         } catch (e: Throwable) { }
 
-        val futureFallbacks = fallback.filter { it.daysAway >= 0 }
-        if (out.isEmpty()) return futureFallbacks
-        // Keep live future UFC cards from ESPN + future Boxing cards from fallback (never past UFC fights).
-        val boxingExtras = futureFallbacks.filter { it.promotion == "BOXING" }
-        return (out + boxingExtras).sortedBy { it.daysAway }.take(10)
+        // Fetch live upcoming Boxing events from TheSportsDB (League 4445 = Boxing), strictly filtering >= today
+        val curYear = Calendar.getInstance().get(Calendar.YEAR)
+        val boxingUrls = listOf(
+            "https://www.thesportsdb.com/api/v1/json/123/eventsnextleague.php?id=4445",
+            "https://www.thesportsdb.com/api/v1/json/123/eventsseason.php?id=4445&s=$curYear"
+        )
+        val seenBoxingIds = HashSet<String>()
+        for (bUrl in boxingUrls) {
+            try {
+                val (bCode, bBody) = HeroRepo.get(bUrl)
+                if (bCode != 200 || bBody == null) continue
+                val evArr = JSONObject(bBody).optJSONArray("events") ?: continue
+                for (i in 0 until evArr.length()) {
+                    val ev = evArr.getJSONObject(i)
+                    val evId = ev.optString("idEvent")
+                    if (evId.isEmpty() || !seenBoxingIds.add(evId)) continue
+                    val status = ev.optString("strStatus").uppercase(Locale.US)
+                    if (status == "FT" || status == "AOT" || status == "POST") continue
+                    if (ev.optString("strPostponed").equals("yes", ignoreCase = true)) continue
+
+                    val rawTs = ev.optString("strTimestamp").ifBlank { ev.optString("dateEvent") }
+                    val parsedDate = parseIsoUtc(rawTs) ?: continue
+                    val daysAway = daysFromToday(parsedDate.time)
+                    // Strict filter: ONLY boxing events today (0) or in the future (>0)
+                    if (daysAway < 0 || daysAway > 90) continue
+
+                    val title = ev.optString("strEvent").trim()
+                    if (title.isEmpty()) continue
+                    val city = ev.optString("strCity").trim()
+                    val country = ev.optString("strCountry").trim()
+                    val rawVenue = ev.optString("strVenue").trim()
+                    val loc = listOf(rawVenue, city, country).filter { it.isNotEmpty() }.joinToString(", ").ifEmpty { "Championship Ring" }
+                    val desc = ev.optString("strDescriptionEN").trim()
+                    val coMain = if (desc.isNotEmpty()) {
+                        desc.lines().firstOrNull { it.isNotBlank() }?.take(70) ?: "World Championship Main Card"
+                    } else "World Championship Main Card"
+
+                    out.add(
+                        CombatEvent(
+                            id = "tsdb_box_$evId",
+                            promotion = "BOXING",
+                            eventTitle = "Boxing: $title",
+                            dateStr = displayFmt.format(parsedDate),
+                            daysAway = daysAway,
+                            venue = loc,
+                            mainEvent = title,
+                            mainWeight = "Title Bout",
+                            coMainEvent = coMain,
+                            coMainWeight = "Main Card",
+                            broadcast = "DAZN / PPV",
+                            undercard = if (desc.isNotEmpty()) listOf(desc) else emptyList(),
+                            pkg = "com.dazn",
+                            eventEpochMs = parsedDate.time
+                        )
+                    )
+                }
+            } catch (e: Throwable) { }
+        }
+
+        // Return strictly verified live future/today events sorted by date (no hardcoded fallback fights).
+        return out.filter { it.daysAway >= 0 }.sortedBy { it.daysAway }.take(12)
     }
 
     private fun fetchLiveMovies(ctx: Context, fallback: List<MovieRelease>): List<MovieRelease> {
@@ -899,97 +961,8 @@ object TrackerRepo {
             )
         )
 
-        val combat = listOf(
-            CombatEvent(
-                id = "cmb_ufc_1",
-                promotion = "UFC",
-                eventTitle = "UFC Fight Night: Moicano vs. Nolan",
-                dateStr = weekendInDays(6, "7:00 PM"),
-                daysAway = 6,
-                venue = "UFC Apex · Las Vegas, NV",
-                mainEvent = "Renato Moicano vs. Tom Nolan",
-                mainWeight = "Lightweight",
-                coMainEvent = "Caio Borralho vs. Roman Dolidze",
-                coMainWeight = "Middleweight",
-                broadcast = "ESPN+",
-                undercard = listOf(
-                    "Payton Talbott vs. Cameron Saaiman (Bantamweight)",
-                    "Karine Silva vs. Tracy Cortez (Women's Flyweight)"
-                ),
-                pkg = "com.espn.score_center"
-            ),
-            CombatEvent(
-                id = "cmb_ufc_2",
-                promotion = "UFC",
-                eventTitle = "UFC Fight Night: Bonfim vs. Brady",
-                dateStr = weekendInDays(13, "7:00 PM"),
-                daysAway = 13,
-                venue = "UFC Apex · Las Vegas, NV",
-                mainEvent = "Gabriel Bonfim vs. Sean Brady",
-                mainWeight = "Welterweight",
-                coMainEvent = "Mayra Bueno Silva vs. Macy Chiasson",
-                coMainWeight = "Women's Bantamweight",
-                broadcast = "ESPN+",
-                undercard = listOf(
-                    "Joe Pyfer vs. Marc-Andre Barriault (Middleweight)",
-                    "jean Silva vs. Drew Dober (Lightweight)"
-                ),
-                pkg = "com.espn.score_center"
-            ),
-            CombatEvent(
-                id = "cmb_ufc_3",
-                promotion = "UFC",
-                eventTitle = "UFC 334: Gane vs. Hokit",
-                dateStr = weekendInDays(20, "10:00 PM"),
-                daysAway = 20,
-                venue = "Madison Square Garden · New York, NY",
-                mainEvent = "Ciryl Gane vs. Josh Hokit",
-                mainWeight = "Heavyweight",
-                coMainEvent = "Belal Muhammad vs. Shavkat Rakhmonov",
-                coMainWeight = "WW Title",
-                broadcast = "ESPN+ PPV",
-                undercard = listOf(
-                    "Diego Lopes vs. Brian Ortega (Featherweight)",
-                    "Kayla Harrison vs. Julianna Peña (Women's Bantamweight)"
-                ),
-                pkg = "com.espn.score_center"
-            ),
-            CombatEvent(
-                id = "cmb_box_1",
-                promotion = "BOXING",
-                eventTitle = "Championship Boxing: World Title Night",
-                dateStr = weekendInDays(13, "8:00 PM"),
-                daysAway = 13,
-                venue = "T-Mobile Arena · Las Vegas, NV",
-                mainEvent = "Canelo Álvarez vs. Terence Crawford",
-                mainWeight = "Undisputed SMW",
-                coMainEvent = "Shakur Stevenson vs. William Zepeda",
-                coMainWeight = "WBC Lightweight",
-                broadcast = "DAZN PPV / Prime Video",
-                undercard = listOf(
-                    "Vergil Ortiz Jr. vs. Jaron Ennis (Welterweight)",
-                    "Subriel Matías vs. Liam Paro (Super Lightweight)"
-                ),
-                pkg = "com.dazn"
-            ),
-            CombatEvent(
-                id = "cmb_ufc_4",
-                promotion = "UFC",
-                eventTitle = "UFC Fight Night: Procházka vs. Stirling",
-                dateStr = weekendInDays(27, "4:00 PM"),
-                daysAway = 27,
-                venue = "O2 Arena · London",
-                mainEvent = "Jiří Procházka vs. Navajo Stirling",
-                mainWeight = "Light Heavyweight",
-                coMainEvent = "Arnold Allen vs. Giga Chikadze",
-                coMainWeight = "Featherweight",
-                broadcast = "ESPN+",
-                undercard = listOf(
-                    "Nathaniel Wood vs. Daniel Pineda (Featherweight)"
-                ),
-                pkg = "com.espn.score_center"
-            )
-        )
+        // No hardcoded UFC or Boxing fights: all combat events are fetched from live schedules with verified dates >= today.
+        val combat = emptyList<CombatEvent>()
 
         return TrackerSnapshot(movies = movies, sports = sports, combat = combat, updatedAtMs = now)
     }
@@ -1032,6 +1005,7 @@ object TrackerRepo {
                     put("coMainEvent", c.coMainEvent); put("coMainWeight", c.coMainWeight)
                     put("broadcast", c.broadcast); put("resultSummary", c.resultSummary)
                     put("pkg", c.pkg ?: "")
+                    put("eventEpochMs", c.eventEpochMs)
                     val u = JSONArray()
                     c.undercard.forEach { u.put(it) }
                     put("undercard", u)
@@ -1060,7 +1034,7 @@ object TrackerRepo {
                     badge = o.getString("badge"), platform = o.getString("platform"),
                     details = o.optString("details"), pkg = o.optString("pkg").ifEmpty { null }
                 )
-            }
+            }.filter { it.daysAway >= 0 }
             val sArr = root.getJSONArray("sports")
             val sports = (0 until sArr.length()).map { i ->
                 val o = sArr.getJSONObject(i)
@@ -1079,19 +1053,23 @@ object TrackerRepo {
                 )
             }
             val cArr = root.getJSONArray("combat")
-            val combat = (0 until cArr.length()).map { i ->
+            val combat = (0 until cArr.length()).mapNotNull { i ->
                 val o = cArr.getJSONObject(i)
+                val epoch = o.optLong("eventEpochMs", 0L)
+                val days = if (epoch > 0L) daysFromToday(epoch) else -1
+                if (days < 0) return@mapNotNull null
                 val uArr = o.optJSONArray("undercard")
                 val under = if (uArr != null) (0 until uArr.length()).map { uArr.getString(it) } else emptyList()
                 CombatEvent(
                     id = o.getString("id"), promotion = o.getString("promotion"),
                     eventTitle = o.getString("eventTitle"), dateStr = o.getString("dateStr"),
-                    daysAway = o.optInt("daysAway", 1), venue = o.optString("venue"),
+                    daysAway = days, venue = o.optString("venue"),
                     mainEvent = o.getString("mainEvent"), mainWeight = o.getString("mainWeight"),
                     coMainEvent = o.getString("coMainEvent"), coMainWeight = o.getString("coMainWeight"),
                     broadcast = o.optString("broadcast"), undercard = under,
                     resultSummary = o.optString("resultSummary"),
-                    pkg = o.optString("pkg").ifEmpty { null }
+                    pkg = o.optString("pkg").ifEmpty { null },
+                    eventEpochMs = epoch
                 )
             }
             if (movies.isEmpty() || sports.isEmpty() || combat.isEmpty()) null
