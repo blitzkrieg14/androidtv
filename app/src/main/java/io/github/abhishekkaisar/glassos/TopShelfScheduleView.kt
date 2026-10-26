@@ -1194,13 +1194,6 @@ class TrackerModal(private val act: HomeScreen) : FrameLayout(act.ctx) {
         }
         contentBox.addView(trackBtn, LinearLayout.LayoutParams(-1, dpi(42f)).apply { topMargin = dpi(12f) })
 
-        if (m.pkg != null) {
-            val openAppBtn = RowView(context, "Open Streaming App").apply {
-                titleView.gravity = Gravity.CENTER
-                onClick = { close(); act.launch(m.pkg, null) }
-            }
-            contentBox.addView(openAppBtn, LinearLayout.LayoutParams(-1, dpi(42f)).apply { topMargin = dpi(5f) })
-        }
         if (m.isCustom) {
             val delBtn = RowView(context, "Remove Custom Item").apply {
                 titleView.gravity = Gravity.CENTER
@@ -1251,13 +1244,6 @@ class TrackerModal(private val act: HomeScreen) : FrameLayout(act.ctx) {
             contentBox.addView(peekBtn, LinearLayout.LayoutParams(-1, dpi(42f)).apply { topMargin = dpi(5f) })
         }
 
-        if (s.pkg != null) {
-            val openBtn = RowView(context, "Open Broadcast App").apply {
-                titleView.gravity = Gravity.CENTER
-                onClick = { close(); act.launch(s.pkg, null) }
-            }
-            contentBox.addView(openBtn, LinearLayout.LayoutParams(-1, dpi(42f)).apply { topMargin = dpi(5f) })
-        }
         if (s.isCustom) {
             val delBtn = RowView(context, "Remove Custom Item").apply {
                 titleView.gravity = Gravity.CENTER
@@ -1307,13 +1293,6 @@ class TrackerModal(private val act: HomeScreen) : FrameLayout(act.ctx) {
         }
         contentBox.addView(trackBtn, LinearLayout.LayoutParams(-1, dpi(42f)).apply { topMargin = dpi(12f) })
 
-        if (c.pkg != null) {
-            val openBtn = RowView(context, "Open Broadcast App").apply {
-                titleView.gravity = Gravity.CENTER
-                onClick = { close(); act.launch(c.pkg, null) }
-            }
-            contentBox.addView(openBtn, LinearLayout.LayoutParams(-1, dpi(42f)).apply { topMargin = dpi(5f) })
-        }
         if (c.isCustom) {
             val delBtn = RowView(context, "Remove Custom Item").apply {
                 titleView.gravity = Gravity.CENTER
