@@ -528,7 +528,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
             listOf(Slide("f:" + f.path + ":" + f.lastModified(), Slide.STATIC, art = f))
         }
         else -> listOf(Slide(id, Slide.STATIC, sceneId = id))
-    }.ifEmpty { listOf(Slide("scene:desert", Slide.STATIC, sceneId = "scene:desert")) }
+    }.ifEmpty { listOf(Slide("scene:navy", Slide.STATIC, sceneId = "scene:navy")) }
 
     /** Refreshes the Top Shelf titles when the cache is older than 6 hours, then swaps in the new list. Runs on [worker]. */
     private fun refreshTitles(id: String, token: Int) {
@@ -628,7 +628,7 @@ class HomeScreen(val ctx: Context, private val host: HomeHost, seed: HomeScreen?
         worker.execute {
             for (t in thumbs) {
                 val b = try {
-                    if (HeroRepo.isHero(t.wallId)) HeroRepo.thumb(ctx, t.wallId, storageGranted(), tw, th) ?: WallpaperStore.thumb(ctx, "scene:desert", tw, th)
+                    if (HeroRepo.isHero(t.wallId)) HeroRepo.thumb(ctx, t.wallId, storageGranted(), tw, th) ?: WallpaperStore.thumb(ctx, "scene:navy", tw, th)
                     else WallpaperStore.thumb(ctx, t.wallId, tw, th)
                 } catch (e: Throwable) { null }
                 ui { t.bitmap = b }

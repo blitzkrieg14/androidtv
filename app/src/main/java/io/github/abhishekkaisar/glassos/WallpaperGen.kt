@@ -26,13 +26,17 @@ object WallpaperGen {
         val c = Canvas(bmp)
         c.scale(w / W, h / H)
         when (scene) {
+            "navy" -> navy(c)
             "ocean" -> ocean(c)
             "aurora" -> aurora(c, bmp)
             "dark" -> dark(c)
-            else -> desert(c)
+            "desert" -> desert(c)
+            else -> navy(c)
         }
-        val g = Paint().apply { shader = Grain.newShader(); alpha = 60 }
-        c.drawRect(0f, 0f, W, H, g)
+        if (scene != "navy") {
+            val g = Paint().apply { shader = Grain.newShader(); alpha = 60 }
+            c.drawRect(0f, 0f, W, H, g)
+        }
         return bmp
     }
 
@@ -355,6 +359,14 @@ object WallpaperGen {
         val p = paint()
         p.color = color
         c.drawPath(path, p)
+    }
+
+    private fun navy(c: Canvas) {
+        vGrad(
+            c, 0f, H,
+            intArrayOf(0xFF0B1D3F.toInt(), 0xFF071229.toInt(), 0xFF030813.toInt(), 0xFF000000.toInt()),
+            floatArrayOf(0f, 0.42f, 0.78f, 1f)
+        )
     }
 
     private fun dark(c: Canvas) {

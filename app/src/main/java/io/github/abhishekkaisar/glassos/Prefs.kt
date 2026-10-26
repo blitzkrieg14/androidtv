@@ -14,8 +14,8 @@ class Prefs(ctx: Context) {
      * the user's own photos in Pictures/Glass (hero:photos) or one image (file:...).
      */
     var scene: String
-        get() = sp.getString("fallback", DEFAULT_SCENE) ?: DEFAULT_SCENE
-        set(v) { sp.edit().putString("fallback", v).apply() }
+        get() = sp.getString("scene_v2", DEFAULT_SCENE) ?: DEFAULT_SCENE
+        set(v) { sp.edit().putString("scene_v2", v).apply() }
 
     /** Top Shelf source: [HeroRepo.SRC_TRACKER] (default), [HeroRepo.SRC_TMDB], [HeroRepo.SRC_APPLE] or [HeroRepo.SRC_SCENES]. */
     var topShelf: String
@@ -107,9 +107,9 @@ class Prefs(ctx: Context) {
         set(v) { sp.edit().putBoolean("askedStorage", v).apply() }
 
     companion object {
-        const val DEFAULT_SCENE = "scene:desert"
+        const val DEFAULT_SCENE = "scene:navy"
         val ALL_SPORTS = listOf("NBA", "NFL", "Soccer", "NHL", "MLB", "F1")
         val DEFAULT_SPORTS = ALL_SPORTS.toSet()
-        val DEFAULT_TRACKED_IDS = setOf("mov_dune_br", "mov_batman_str", "spt_nba_1", "spt_nfl_1", "cmb_ufc_1", "cmb_box_1")
+        val DEFAULT_TRACKED_IDS = setOf("spt_nba_1", "spt_nfl_1")
     }
 }

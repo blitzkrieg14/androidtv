@@ -13,8 +13,9 @@ import java.io.FileOutputStream
 class Wallpaper(val sharp: Bitmap, val blurred: Bitmap)
 
 object WallpaperStore {
-    private const val GEN = 9
+    private const val GEN = 10
     val scenes = listOf(
+        "scene:navy" to "Navy to black",
         "scene:desert" to "Night desert",
         "scene:ocean" to "Dusk ocean",
         "scene:aurora" to "Aurora",
@@ -39,7 +40,7 @@ object WallpaperStore {
         scenes.firstOrNull { it.first == id }?.second ?: File(id.removePrefix("file:")).nameWithoutExtension
 
     fun load(ctx: Context, id: String, w: Int, h: Int): Wallpaper {
-        val sharp = if (id.startsWith("file:")) decodeCrop(File(id.removePrefix("file:")), w, h) ?: scene(ctx, "desert", w, h)
+        val sharp = if (id.startsWith("file:")) decodeCrop(File(id.removePrefix("file:")), w, h) ?: scene(ctx, "navy", w, h)
         else scene(ctx, id.removePrefix("scene:"), w, h)
         val blurFile = File(ctx.filesDir, "blur_${key(id)}_${GEN}_${w}x$h.png")
         val cached = if (blurFile.exists() && !id.startsWith("file:")) BitmapFactory.decodeFile(blurFile.path) else null

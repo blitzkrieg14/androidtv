@@ -91,7 +91,7 @@ object TrackerRepo {
         private set
 
     private fun cacheFile(ctx: Context): File =
-        File(File(ctx.filesDir, "tracker").apply { mkdirs() }, "schedule_v6.json")
+        File(File(ctx.filesDir, "tracker").apply { mkdirs() }, "schedule_v10.json")
 
     /**
      * Performs an HTTPS GET for schedule JSON. If standard TLS fails due to emulator/TV clock skew
@@ -99,7 +99,7 @@ object TrackerRepo {
      */
     private fun getJson(url: String, headers: Map<String, String> = emptyMap()): Pair<Int, String?> {
         val mergedHeaders = HashMap<String, String>().apply {
-            put("User-Agent", "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             put("Accept", "application/json, */*")
             putAll(headers)
         }
@@ -204,7 +204,7 @@ object TrackerRepo {
         val f = cacheFile(ctx)
         if (!force && f.exists() && System.currentTimeMillis() - f.lastModified() < CACHE_TTL_MS) {
             val cached = readCache(ctx)
-            if (cached != null) {
+            if (cached != null && cached.movies.isNotEmpty() && cached.combat.isNotEmpty()) {
                 latest = cached
                 return mergeWithCustom(ctx, cached)
             }
@@ -665,52 +665,191 @@ object TrackerRepo {
         return out.filter { it.daysAway >= 0 }.sortedBy { it.daysAway }.take(14)
     }
 
+    private fun decodeHtmlText(raw: String): String =
+        raw.replace("&amp;", "&")
+            .replace("&#039;", "'")
+            .replace("&apos;", "'")
+            .replace("&quot;", "\"")
+            .replace("&ndash;", "–")
+            .replace("&mdash;", "—")
+            .replace("&uacute;", "ú")
+            .replace("&eacute;", "é")
+            .replace("&aacute;", "á")
+            .replace("&iacute;", "í")
+            .replace("&oacute;", "ó")
+            .replace("&ntilde;", "ñ")
+            .trim()
+
     private fun fetchLiveMovies(ctx: Context, fallback: List<MovieRelease>): List<MovieRelease> {
-        val key = Prefs(ctx).effectiveTmdbKey
-        if (key.isEmpty()) return fallback.filter { it.daysAway >= 0 }
         val out = ArrayList<MovieRelease>()
-        try {
-            val todayIso = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date(startOfTodayMs()))
-            val bearer = key.startsWith("eyJ")
-            val headers = if (bearer) mapOf("Authorization" to "Bearer $key", "Accept" to "application/json")
-            else mapOf("Accept" to "application/json")
-            val authParam = if (bearer) "" else "&api_key=$key"
-            val url = "https://api.themoviedb.org/3/movie/upcoming?language=en-US&page=1&primary_release_date.gte=$todayIso$authParam"
-            val (code, body) = HeroRepo.get(url, headers)
-            if (code == 200 && body != null) {
-                val results = JSONObject(body).optJSONArray("results")
-                if (results != null) {
-                    val outFmt = SimpleDateFormat("MMM d", Locale.US)
-                    for (i in 0 until results.length()) {
-                        val m = results.getJSONObject(i)
-                        val title = m.optString("title")
-                        val rawDate = m.optString("release_date")
-                        val parsed = parseIsoUtc(rawDate) ?: continue
-                        val days = daysFromToday(parsed.time)
-                        // Strictly skip any movie whose release date is in the past
-                        if (days < 0) continue
-                        val dStr = outFmt.format(parsed)
-                        val isBr = out.size % 2 == 0
-                        out.add(
-                            MovieRelease(
-                                id = "tmdb_up_${m.optInt("id")}",
-                                title = title,
-                                dateStr = dStr,
-                                relativeStr = when (days) { 0 -> "Today"; 1 -> "Tomorrow"; else -> "In ${days}d" },
-                                daysAway = days,
-                                category = if (isBr) "BLURAY" else "STREAMING",
-                                badge = if (isBr) "4K UHD" else "STREAM",
-                                platform = if (isBr) "4K UHD / Blu-ray" else "Digital & Streaming",
-                                details = m.optString("overview").ifEmpty { "Upcoming release ($dStr)." }
-                            )
-                        )
-                        if (out.size >= 8) break
+        val seenTitles = HashSet<String>()
+        val curYear = Calendar.getInstance().get(Calendar.YEAR)
+        val outFmt = SimpleDateFormat("MMM d", Locale.US)
+        val weekHdrFmt = SimpleDateFormat("EEEE MMMM d, yyyy", Locale.US)
+        val excludeTitleRegex = Regex("\\b(Season|Ssn|Series|Collection|Complete|Volume|Vol\\.|Edition|Anniversary|Re-issue)\\b", RegexOption.IGNORE_CASE)
+        val weekHeaderRegex = Regex("class='reldate[^']*'[^>]*>(?:<a[^>]*></a>)?([A-Za-z]+\\s+[A-Za-z]+\\s+\\d+,\\s+\\d{4})", RegexOption.IGNORE_CASE)
+        val posterYearRegex = Regex("-(\\d{4})\\.(?:jpg|png|gif)", RegexOption.IGNORE_CASE)
+        val titleLinkRegex = Regex("<br/>\\s*<a[^>]*href='/movies/(\\d+)/[^']*'[^>]*>([^<]+)</a>", RegexOption.IGNORE_CASE)
+        val imdbScoreRegex = Regex("imdb:\\s*<a[^>]*>([^<]+)</a>", RegexOption.IGNORE_CASE)
+        val mpaaRegex = Regex("<td class='imdblink right'>([^<&]+)", RegexOption.IGNORE_CASE)
+
+        fun parseDvdReleasePage(html: String, isDigitalPage: Boolean) {
+            val headerMatches = weekHeaderRegex.findAll(html).toList()
+            for (idx in headerMatches.indices) {
+                val hm = headerMatches[idx]
+                val dateHeader = hm.groupValues[1].trim()
+                val parsedDate = try { weekHdrFmt.parse(dateHeader) } catch (e: Throwable) { null } ?: continue
+                val days = daysFromToday(parsedDate.time)
+                if (days < 0 || days > 65) continue
+                val dStr = outFmt.format(parsedDate)
+                val relStr = when (days) { 0 -> "Today"; 1 -> "Tomorrow"; else -> "In ${days}d" }
+
+                val startPos = hm.range.last + 1
+                val endPos = if (idx + 1 < headerMatches.size) headerMatches[idx + 1].range.first else html.length
+                if (startPos >= endPos) continue
+                val weekSection = html.substring(startPos, endPos)
+
+                val cells = weekSection.split("<td class='dvdcell'>")
+                for (cIdx in 1 until cells.size) {
+                    val cell = cells[cIdx]
+                    // Require poster year >= current year so only brand-new theatrical movies coming out for the first time are included
+                    val posterYear = posterYearRegex.find(cell)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                    if (posterYear < curYear) continue
+
+                    val tMatch = titleLinkRegex.find(cell) ?: continue
+                    val movieId = tMatch.groupValues[1]
+                    val rawTitle = decodeHtmlText(tMatch.groupValues[2]).removeSuffix(" DVD").trim()
+                    if (rawTitle.isEmpty() || excludeTitleRegex.containsMatchIn(rawTitle)) continue
+
+                    val has4k = cell.contains(">4K<", ignoreCase = true)
+                    val hasBluray = cell.contains(">Blu-ray<", ignoreCase = true)
+                    if (!isDigitalPage && !has4k && !hasBluray) continue
+
+                    val normKey = "${rawTitle.lowercase(Locale.US)}_${if (isDigitalPage) "S" else "B"}"
+                    if (!seenTitles.add(normKey)) continue
+
+                    val imdb = imdbScoreRegex.find(cell)?.groupValues?.get(1)?.trim().orEmpty()
+                    val mpaa = mpaaRegex.find(cell)?.groupValues?.get(1)?.trim().orEmpty()
+                    val metaParts = ArrayList<String>()
+                    if (mpaa.isNotEmpty() && mpaa != "&nbsp;" && !mpaa.equals("NR", ignoreCase = true)) metaParts.add("Rated $mpaa")
+                    if (imdb.isNotEmpty() && !imdb.equals("NA", ignoreCase = true)) metaParts.add("IMDb $imdb/10")
+                    val metaSuffix = if (metaParts.isNotEmpty()) " (${metaParts.joinToString(" · ")})" else ""
+
+                    val category = if (isDigitalPage) "STREAMING" else "BLURAY"
+                    val badge = when {
+                        isDigitalPage -> "STREAM"
+                        has4k -> "4K UHD"
+                        else -> "BLU-RAY"
                     }
+                    val platform = when {
+                        isDigitalPage -> "Digital & Streaming · First Home Release"
+                        has4k -> "4K UHD + Blu-ray · First Home Release"
+                        else -> "Blu-ray + Digital · First Home Release"
+                    }
+                    val details = "New $posterYear theatrical release arriving on ${if (isDigitalPage) "Digital & Streaming" else "4K UHD / Blu-ray"} for the first time on $dStr$metaSuffix."
+
+                    out.add(
+                        MovieRelease(
+                            id = "new_${if (isDigitalPage) "str" else "br"}_$movieId",
+                            title = rawTitle,
+                            dateStr = dStr,
+                            relativeStr = relStr,
+                            daysAway = days,
+                            category = category,
+                            badge = badge,
+                            platform = platform,
+                            details = details
+                        )
+                    )
+                }
+            }
+        }
+
+        // 1. Live Digital & Streaming first-time post-theatrical releases (current + next month)
+        try {
+            val (code, body) = getJson("https://www.dvdsreleasedates.com/digital-releases/", mapOf("Accept" to "text/html"))
+            if (code == 200 && body != null) {
+                parseDvdReleasePage(body, isDigitalPage = true)
+                val nextHref = Regex("href='(/digital-releases/[^']+)'\\s*>[^<]*&gt;", RegexOption.IGNORE_CASE)
+                    .find(body)?.groupValues?.get(1)
+                if (!nextHref.isNullOrBlank()) {
+                    val (c2, b2) = getJson("https://www.dvdsreleasedates.com$nextHref", mapOf("Accept" to "text/html"))
+                    if (c2 == 200 && b2 != null) parseDvdReleasePage(b2, isDigitalPage = true)
                 }
             }
         } catch (e: Throwable) { }
-        val futureFallback = fallback.filter { it.daysAway >= 0 }
-        return if (out.isEmpty()) futureFallback else (out + futureFallback).distinctBy { it.title.lowercase() }.take(12)
+
+        // 2. Live 4K UHD & Blu-ray first-time post-theatrical releases (current + next month)
+        try {
+            val nowCal = Calendar.getInstance()
+            val y1 = nowCal.get(Calendar.YEAR)
+            val m1 = nowCal.get(Calendar.MONTH) + 1
+            nowCal.add(Calendar.MONTH, 1)
+            val y2 = nowCal.get(Calendar.YEAR)
+            val m2 = nowCal.get(Calendar.MONTH) + 1
+            val brUrls = listOf(
+                "https://www.dvdsreleasedates.com/releases/$y1/$m1/",
+                "https://www.dvdsreleasedates.com/releases/$y2/$m2/"
+            )
+            for (u in brUrls) {
+                val (code, body) = getJson(u, mapOf("Accept" to "text/html"))
+                if (code == 200 && body != null) parseDvdReleasePage(body, isDigitalPage = false)
+            }
+            if (out.none { it.category == "BLURAY" }) {
+                val (code, body) = getJson("https://www.dvdsreleasedates.com/", mapOf("Accept" to "text/html"))
+                if (code == 200 && body != null) parseDvdReleasePage(body, isDigitalPage = false)
+            }
+        } catch (e: Throwable) { }
+
+        // 3. Optional TMDB upcoming movies when an API key is configured
+        val key = Prefs(ctx).effectiveTmdbKey
+        if (key.isNotEmpty()) {
+            try {
+                val todayIso = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date(startOfTodayMs()))
+                val bearer = key.startsWith("eyJ")
+                val headers = if (bearer) mapOf("Authorization" to "Bearer $key", "Accept" to "application/json")
+                else mapOf("Accept" to "application/json")
+                val authParam = if (bearer) "" else "&api_key=$key"
+                val url = "https://api.themoviedb.org/3/movie/upcoming?language=en-US&page=1&primary_release_date.gte=$todayIso$authParam"
+                val (code, body) = getJson(url, headers)
+                if (code == 200 && body != null) {
+                    val results = JSONObject(body).optJSONArray("results")
+                    if (results != null) {
+                        for (i in 0 until results.length()) {
+                            val m = results.getJSONObject(i)
+                            val title = m.optString("title").trim()
+                            val rawDate = m.optString("release_date")
+                            if (!rawDate.startsWith(curYear.toString()) && !rawDate.startsWith((curYear + 1).toString())) continue
+                            val parsed = parseIsoUtc(rawDate) ?: continue
+                            val days = daysFromToday(parsed.time)
+                            if (days < 0) continue
+                            val dStr = outFmt.format(parsed)
+                            val isBr = out.size % 2 == 0
+                            val normKey = "${title.lowercase(Locale.US)}_${if (isBr) "B" else "S"}"
+                            if (!seenTitles.add(normKey)) continue
+                            out.add(
+                                MovieRelease(
+                                    id = "tmdb_up_${m.optInt("id")}",
+                                    title = title,
+                                    dateStr = dStr,
+                                    relativeStr = when (days) { 0 -> "Today"; 1 -> "Tomorrow"; else -> "In ${days}d" },
+                                    daysAway = days,
+                                    category = if (isBr) "BLURAY" else "STREAMING",
+                                    badge = if (isBr) "4K UHD" else "STREAM",
+                                    platform = if (isBr) "4K UHD / Blu-ray · First Home Release" else "Digital & Streaming · First Home Release",
+                                    details = m.optString("overview").ifEmpty { "New theatrical release ($dStr)." }
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (e: Throwable) { }
+        }
+
+        // Balance Digital/Streaming and Blu-ray/4K UHD entries and sort chronologically from today forward
+        val streaming = out.filter { it.category == "STREAMING" && it.daysAway >= 0 }.sortedBy { it.daysAway }.take(10)
+        val bluray = out.filter { it.category == "BLURAY" && it.daysAway >= 0 }.sortedBy { it.daysAway }.take(10)
+        return (streaming + bluray).sortedBy { it.daysAway }
     }
 
     // ---------- Curated Schedule Snapshot (Always ready offline & online) ----------
@@ -740,104 +879,8 @@ object TrackerRepo {
             else -> "In ${days}d"
         }
 
-        val movies = listOf(
-            MovieRelease(
-                id = "mov_dune_br",
-                title = "Dune: Part Two (Collector's Edition)",
-                dateStr = dateInDays(2),
-                relativeStr = relLabel(2),
-                daysAway = 2,
-                category = "BLURAY",
-                badge = "4K UHD",
-                platform = "4K UHD SteelBook · Dolby Vision",
-                details = "Limited 3-Disc 4K UHD + Blu-ray Collector's Edition featuring IMAX aspect ratio scenes, director commentary, and 90 minutes of behind-the-scenes featurettes.",
-                pkg = "com.wbd.stream"
-            ),
-            MovieRelease(
-                id = "mov_batman_str",
-                title = "The Batman: Part II — Gotham Prelude",
-                dateStr = dateInDays(4),
-                relativeStr = relLabel(4),
-                daysAway = 4,
-                category = "STREAMING",
-                badge = "STREAM",
-                platform = "Max · 4K Dolby Atmos",
-                details = "Streaming premiere in 4K UHD with Dolby Vision & Dolby Atmos exclusively on Max.",
-                pkg = "com.wbd.stream"
-            ),
-            MovieRelease(
-                id = "mov_alien_br",
-                title = "Alien: Romulus",
-                dateStr = dateInDays(6),
-                relativeStr = relLabel(6),
-                daysAway = 6,
-                category = "BLURAY",
-                badge = "4K UHD",
-                platform = "4K UHD + Blu-ray + Digital",
-                details = "Physical 4K Ultra HD Blu-ray release with alternate extended scenes, practical creature effects documentary, and lossless 7.1 DTS-HD Master Audio.",
-                pkg = "com.hulu.livingroomplus"
-            ),
-            MovieRelease(
-                id = "mov_gladiator_str",
-                title = "Gladiator II (Extended Cut)",
-                dateStr = dateInDays(8),
-                relativeStr = relLabel(8),
-                daysAway = 8,
-                category = "STREAMING",
-                badge = "STREAM",
-                platform = "Paramount+ & Prime Video",
-                details = "Extended Director's Cut streaming debut featuring 24 minutes of additional arena and Roman Senate footage.",
-                pkg = "com.cbs.ott"
-            ),
-            MovieRelease(
-                id = "mov_nosferatu_br",
-                title = "Nosferatu (Robert Eggers)",
-                dateStr = dateInDays(11),
-                relativeStr = relLabel(11),
-                daysAway = 11,
-                category = "BLURAY",
-                badge = "BLU-RAY",
-                platform = "4K UHD / Blu-ray Collector's Slip",
-                details = "4K UHD & Blu-ray physical release supervised by cinematographer Jarin Blaschke, including deleted scenes and gothic production design gallery.",
-                pkg = "com.peacocktv.peacockandroid"
-            ),
-            MovieRelease(
-                id = "mov_knives_str",
-                title = "Wake Up Dead Man: A Knives Out Mystery",
-                dateStr = dateInDays(14),
-                relativeStr = relLabel(14),
-                daysAway = 14,
-                category = "STREAMING",
-                badge = "STREAM",
-                platform = "Netflix · Worldwide Premiere",
-                details = "Benoit Blanc returns for his most dangerous case yet. Streaming worldwide in 4K HDR on Netflix.",
-                pkg = "com.netflix.ninja"
-            ),
-            MovieRelease(
-                id = "mov_f1_br",
-                title = "F1: The Movie (Apex Edition)",
-                dateStr = dateInDays(18),
-                relativeStr = relLabel(18),
-                daysAway = 18,
-                category = "BLURAY",
-                badge = "4K UHD",
-                platform = "4K UHD Blu-ray + Apple TV+",
-                details = "Shot with custom cockpit IMAX cameras at real Grand Prix weekends. Includes full onboard telemetry bonus disc.",
-                pkg = "com.apple.atve.androidtv.appletv"
-            ),
-            MovieRelease(
-                id = "mov_spiderman_str",
-                title = "Spider-Man: Beyond the Spider-Verse",
-                dateStr = dateInDays(22),
-                relativeStr = relLabel(22),
-                daysAway = 22,
-                category = "STREAMING",
-                badge = "DIGITAL",
-                platform = "Digital VOD & Netflix",
-                details = "Home digital & streaming release with frame-by-frame animator breakdown mode.",
-                pkg = "com.netflix.ninja"
-            )
-        )
+        // No hardcoded older movies: live first-time post-theatrical releases are fetched from dvdsreleasedates.com / TMDB.
+        val movies = emptyList<MovieRelease>()
 
         val sports = listOf(
             SportGame(
