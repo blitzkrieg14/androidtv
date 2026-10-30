@@ -1,11 +1,19 @@
 package io.github.abhishekkaisar.glassos
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.text.TextPaint
 import android.text.TextUtils
 import android.view.Gravity
@@ -14,6 +22,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -88,6 +97,36 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
     private val movieViews = ArrayList<View>()
     private val sportViews = ArrayList<View>()
     private val combatViews = ArrayList<View>()
+
+    private val autoScrollHandler = Handler(Looper.getMainLooper())
+    private var autoScrollY = 0f
+    private val autoScrollRunnable = object : Runnable {
+        override fun run() {
+            if (!isAttachedToWindow) return
+            // Auto-scroll upward continuously when the movies bubble is at rest
+            if (activeColumn != 0 && movieViews.isNotEmpty()) {
+                val maxScroll = (moviesList.height - moviesScroll.height).coerceAtLeast(0)
+                if (maxScroll > 0) {
+                    autoScrollY += dp(0.6f)
+                    if (autoScrollY >= maxScroll) {
+                        autoScrollY = 0f
+                    }
+                    moviesScroll.scrollTo(0, autoScrollY.toInt())
+                }
+            }
+            autoScrollHandler.postDelayed(this, 30)
+        }
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        autoScrollHandler.postDelayed(autoScrollRunnable, 1200)
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        autoScrollHandler.removeCallbacks(autoScrollRunnable)
+    }
 
     init {
         clipChildren = false
@@ -210,14 +249,20 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
 
     private fun setupMoviesColumn() {
         val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; clipChildren = true }
-        col.addView(makeColumnHeader("UPCOMING MOVIES", "Blu-ray & Streaming", movieCountView))
+        col.addView(makeColumnHeader("UPCOMING MOVIES", "Theaters, 4K & Digital", movieCountView))
 
+        val chipScroll = HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isFocusable = false
+            clipChildren = false; clipToPadding = false
+        }
         val filterRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dpi(8f), 0, dpi(8f), dpi(3f))
             clipChildren = false; clipToPadding = false
         }
-        val options = listOf("ALL" to "All", "BLURAY" to "Blu-ray / 4K", "STREAMING" to "Streaming")
+        val options = listOf("ALL" to "All", "THEATERS" to "In Theaters", "BLURAY" to "Blu-ray / 4K", "STREAMING" to "Digital / Stream")
         for ((code, label) in options) {
             val chip = FilterChip(context, label).apply {
                 id = View.generateViewId()
@@ -231,7 +276,8 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
             movieFilterChips.add(chip)
             filterRow.addView(chip, LinearLayout.LayoutParams(-2, dpi(18f)).apply { rightMargin = dpi(4f) })
         }
-        col.addView(filterRow, LinearLayout.LayoutParams(-1, -2))
+        chipScroll.addView(filterRow, ViewGroup.LayoutParams(-2, -2))
+        col.addView(chipScroll, LinearLayout.LayoutParams(-1, -2))
         col.addView(moviesScroll, LinearLayout.LayoutParams(-1, 0, 1f))
         moviesBox.addView(col, LayoutParams(-1, -1))
     }
@@ -454,18 +500,18 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         val tracked = prefs.trackedIds
         val onlyTracked = prefs.trackedOnly
         val filtered = snapshot.movies.filter { m ->
-            m.daysAway >= 0 && (filter == "ALL" || m.category == filter) && (!onlyTracked || m.id in tracked)
+            m.isTheatrical && m.daysAway >= 0 && (filter == "ALL" || m.category == filter) && (!onlyTracked || m.id in tracked)
         }.sortedWith(compareByDescending<MovieRelease> { it.id in tracked }.thenBy { it.daysAway })
 
         moviesList.removeAllViews()
         movieViews.clear()
 
         if (filtered.isEmpty()) {
-            moviesList.addView(emptyHint("No matching movie releases"))
+            moviesList.addView(emptyHint("No upcoming theatrical releases"))
             return
         }
         for (m in filtered) {
-            val row = MovieRowView(context, m, m.id in tracked).apply {
+            val card = MoviePosterCardView(context, m, m.id in tracked).apply {
                 id = View.generateViewId()
                 onClick = {
                     act.trackerModal.openMovieDetail(m) {
@@ -474,8 +520,8 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
                     }
                 }
             }
-            moviesList.addView(row, LinearLayout.LayoutParams(-1, dpi(36f)).apply { bottomMargin = dpi(3.5f) })
-            movieViews.add(row)
+            moviesList.addView(card, LinearLayout.LayoutParams(-1, dpi(180f)).apply { bottomMargin = dpi(8f) })
+            movieViews.add(card)
         }
     }
 
@@ -673,34 +719,56 @@ private class BubbleGlassBox(ctx: Context, radius: Float) : GlassBox(ctx, radius
     }
 }
 
-// ---------- Compact Schedule Row Views ----------
+// ---------- Visual Movie Poster Card & Compact Schedule Row Views ----------
 
-/** Compact row for an Upcoming Movie Release (Blu-ray / 4K UHD or Streaming / Digital with date). */
-private class MovieRowView(
+/** Visual Movie Poster Card: displays the actual movie poster with a smooth upward pan and release date info. */
+private class MoviePosterCardView(
     ctx: Context,
     val item: MovieRelease,
     val tracked: Boolean
 ) : View(ctx) {
     var onClick: (() -> Unit)? = null
-    private val focus = FocusAnim(this, 1.02f) { invalidate() }
+    private val focus = FocusAnim(this, 1.03f) { invalidate() }
     private val rect = RectF()
     private val badgeRect = RectF()
+    private val clipPath = Path()
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Fonts.medium; textSize = ctx.dp(10.2f) }
-    private val subPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Fonts.regular; textSize = ctx.dp(8.6f) }
-    private val badgePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Fonts.medium; textSize = ctx.dp(7.2f) }
+    private val posterPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val scrimPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = Fonts.medium; textSize = ctx.dp(12f); color = Color.WHITE
+        setShadowLayer(ctx.dp(4f), 0f, ctx.dp(1.2f), 0xCC000000.toInt())
+    }
+    private val subPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = Fonts.regular; textSize = ctx.dp(8.8f); color = 0xCCFFFFFF.toInt()
+        setShadowLayer(ctx.dp(3f), 0f, ctx.dp(1f), 0x99000000.toInt())
+    }
+    private val badgePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = Fonts.medium; textSize = ctx.dp(7.5f); color = Color.WHITE; textAlign = Paint.Align.CENTER
+    }
     private val datePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        typeface = Fonts.medium; textSize = ctx.dp(9.2f); textAlign = Paint.Align.RIGHT
+        typeface = Fonts.medium; textSize = ctx.dp(9.4f); textAlign = Paint.Align.RIGHT
+        setShadowLayer(ctx.dp(3f), 0f, ctx.dp(1f), 0x99000000.toInt())
     }
     private val relPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = Fonts.regular; textSize = ctx.dp(7.8f); textAlign = Paint.Align.RIGHT
+        setShadowLayer(ctx.dp(3f), 0f, ctx.dp(1f), 0x99000000.toInt())
     }
+    private val posterMatrix = Matrix()
+
+    private var posterBmp: Bitmap? = PosterCache.get(item.posterUrl)
 
     init {
         isFocusable = true
         isClickable = true
         setOnClickListener { onClick?.invoke() }
+        if (posterBmp == null && item.posterUrl.isNotEmpty()) {
+            PosterCache.load(context, item.posterUrl, 320, 480) { bmp ->
+                posterBmp = bmp
+                invalidate()
+            }
+        }
     }
 
     override fun onFocusChanged(gained: Boolean, direction: Int, previous: Rect?) {
@@ -712,50 +780,111 @@ private class MovieRowView(
         val f = focus.amount
         val w = width.toFloat()
         val h = height.toFloat()
-        val r = dp(8.5f)
+        val r = dp(12f)
         rect.set(0f, 0f, w, h)
 
-        fill.color = lerpColor(if (tracked) 0x22FFFFFF else 0x12FFFFFF, 0xF2FFFFFF.toInt(), f)
-        c.drawRoundRect(rect, r, r, fill)
+        clipPath.reset()
+        clipPath.addRoundRect(rect, r, r, Path.Direction.CW)
+        c.save()
+        c.clipPath(clipPath)
 
-        if (tracked && f < 0.5f) {
-            stroke.strokeWidth = dp(0.8f)
-            stroke.color = 0x55FFD60A
-            c.drawRoundRect(dp(0.5f), dp(0.5f), w - dp(0.5f), h - dp(0.5f), r, r, stroke)
+        val bmp = posterBmp
+        if (bmp != null && !bmp.isRecycled) {
+            // Smooth upward pan animation within the poster image
+            val now = SystemClock.uptimeMillis()
+            val panProgress = (now % 16000L) / 16000f
+            val bw = bmp.width.toFloat()
+            val bh = bmp.height.toFloat()
+            val scale = maxOf(w / bw, (h + dp(28f)) / bh)
+            val scaledW = bw * scale
+            val scaledH = bh * scale
+            val extraY = (scaledH - h).coerceAtLeast(0f)
+            val panY = -extraY * panProgress
+
+            posterMatrix.reset()
+            posterMatrix.setScale(scale, scale)
+            posterMatrix.postTranslate((w - scaledW) / 2f, panY)
+            c.drawBitmap(bmp, posterMatrix, posterPaint)
+        } else {
+            // Elegant deep gradient while poster is loading
+            fill.shader = LinearGradient(0f, 0f, w, h,
+                intArrayOf(0xFF141926.toInt(), 0xFF0B0E14.toInt()), null, Shader.TileMode.CLAMP)
+            c.drawRect(rect, fill)
+            fill.shader = null
         }
 
-        // Format badge pill on the left
-        val isBluray = item.category == "BLURAY"
-        val badgeBg = if (isBluray) 0xFF0A84FF.toInt() else 0xFF30D158.toInt()
-        val bw = badgePaint.measureText(item.badge) + dp(7.5f)
-        val bh = dp(12.5f)
-        val bx = dp(6.5f)
-        val by = dp(5.5f)
+        // Bottom frosted gradient scrim so titles and badges remain crystal clear
+        scrimPaint.shader = LinearGradient(
+            0f, 0f, 0f, h,
+            intArrayOf(0x35000000, 0x10000000, 0x8A000000.toInt(), 0xEB080A0E.toInt()),
+            floatArrayOf(0f, 0.35f, 0.65f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        c.drawRect(rect, scrimPaint)
+
+        // Format Badge (THEATERS, 4K UHD, STREAM, BLU-RAY) top-left
+        val badgeColor = when (item.category) {
+            "THEATERS" -> 0xFF00C7BE.toInt()
+            "BLURAY" -> if (item.badge.contains("4K")) 0xFF0A84FF.toInt() else 0xFF5E5CE6.toInt()
+            else -> 0xFF30D158.toInt()
+        }
+        val bw = badgePaint.measureText(item.badge) + dp(9f)
+        val bh = dp(14f)
+        val bx = dp(8f)
+        val by = dp(8f)
         badgeRect.set(bx, by, bx + bw, by + bh)
-        fill.color = if (f > 0.5f) badgeBg else alphaOf(badgeBg, 0.82f)
-        c.drawRoundRect(badgeRect, bh / 2f, bh / 2f, fill)
-        badgePaint.color = Color.WHITE
-        c.drawText(item.badge, bx + dp(3.75f), by + bh / 2f - (badgePaint.ascent() + badgePaint.descent()) / 2f, badgePaint)
+        fill.color = badgeColor
+        c.drawRoundRect(badgeRect, dp(4f), dp(4f), fill)
+        c.drawText(item.badge, bx + bw / 2f, by + bh / 2f - (badgePaint.ascent() + badgePaint.descent()) / 2f, badgePaint)
 
-        // Date + countdown on the right
-        val rightX = w - dp(7f)
+        // Theatrical tag if space permits
+        if (item.isTheatrical && item.category != "THEATERS") {
+            val thTag = "THEATRICAL"
+            val thW = badgePaint.measureText(thTag) + dp(7f)
+            val thX = bx + bw + dp(5f)
+            badgeRect.set(thX, by, thX + thW, by + bh)
+            fill.color = 0x55000000
+            c.drawRoundRect(badgeRect, dp(4f), dp(4f), fill)
+            stroke.strokeWidth = dp(0.8f)
+            stroke.color = 0x66FFFFFF
+            c.drawRoundRect(badgeRect, dp(4f), dp(4f), stroke)
+            c.drawText(thTag, thX + thW / 2f, by + bh / 2f - (badgePaint.ascent() + badgePaint.descent()) / 2f, badgePaint)
+        }
+
+        // Release Date & countdown top-right
+        val rightX = w - dp(8f)
         val dateText = if (tracked) "★ ${item.dateStr}" else item.dateStr
-        datePaint.color = lerpColor(if (tracked) 0xFFFFD60A.toInt() else 0xFFFFFFFF.toInt(), 0xFF101218.toInt(), f)
-        c.drawText(dateText, rightX, dp(15f), datePaint)
+        datePaint.color = if (tracked) 0xFFFFD60A.toInt() else 0xFFFFFFFF.toInt()
+        c.drawText(dateText, rightX, by + dp(10f), datePaint)
+        relPaint.color = 0xB3FFFFFF.toInt()
+        c.drawText(item.relativeStr, rightX, by + dp(22f), relPaint)
 
-        relPaint.color = lerpColor(0x99FFFFFF.toInt(), 0xFF4A4E58.toInt(), f)
-        c.drawText(item.relativeStr, rightX, dp(28f), relPaint)
+        // Bottom text: Movie Title and Platform / Theatrical info
+        val padX = dp(8f)
+        val maxTitleW = w - padX * 2f
+        val ellipTitle = TextUtils.ellipsize(item.title, titlePaint, maxTitleW, TextUtils.TruncateAt.END).toString()
+        c.drawText(ellipTitle, padX, h - dp(24f), titlePaint)
 
-        // Title and platform
-        val textLeft = bx + bw + dp(5.5f)
-        val maxTextW = (rightX - datePaint.measureText(dateText) - dp(6f) - textLeft).coerceAtLeast(dp(36f))
-        titlePaint.color = lerpColor(Color.WHITE, 0xFF101218.toInt(), f)
-        val ellipsizedTitle = TextUtils.ellipsize(item.title, titlePaint, maxTextW, TextUtils.TruncateAt.END).toString()
-        c.drawText(ellipsizedTitle, textLeft, dp(15.2f), titlePaint)
+        val ellipSub = TextUtils.ellipsize(item.platform, subPaint, maxTitleW, TextUtils.TruncateAt.END).toString()
+        c.drawText(ellipSub, padX, h - dp(10f), subPaint)
 
-        subPaint.color = lerpColor(0xA6FFFFFF.toInt(), 0xFF484C56.toInt(), f)
-        val ellipsizedSub = TextUtils.ellipsize(item.platform, subPaint, maxTextW + bw, TextUtils.TruncateAt.END).toString()
-        c.drawText(ellipsizedSub, bx, dp(28.5f), subPaint)
+        c.restore()
+
+        // Focus & Tracked Border
+        if (tracked && f < 0.5f) {
+            stroke.strokeWidth = dp(1.2f)
+            stroke.color = 0x88FFD60A.toInt()
+            c.drawRoundRect(dp(0.6f), dp(0.6f), w - dp(0.6f), h - dp(0.6f), r, r, stroke)
+        }
+        if (f > 0.01f) {
+            stroke.strokeWidth = dp(2f)
+            stroke.color = alphaOf(0xFF64D2FF.toInt(), f)
+            val hs = stroke.strokeWidth / 2f
+            c.drawRoundRect(hs, hs, w - hs, h - hs, r, r, stroke)
+        }
+
+        // Keep the upward pan gently moving
+        postInvalidateOnAnimation()
     }
 }
 
@@ -1180,9 +1309,37 @@ class TrackerModal(private val act: HomeScreen) : FrameLayout(act.ctx) {
     /** Detail & action modal for an Upcoming Movie Release. */
     fun openMovieDetail(m: MovieRelease, changed: () -> Unit) {
         contentBox.removeAllViews()
-        contentBox.addView(modalTitle(m.title))
-        contentBox.addView(modalSub("${m.badge} · Release Date: ${m.dateStr} (${m.relativeStr}) · ${m.platform}"))
-        contentBox.addView(modalBody(m.details))
+
+        val headerRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipChildren = false
+            clipToPadding = false
+        }
+        if (m.posterUrl.isNotEmpty()) {
+            val posterView = ImageView(context).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                clipToOutline = true
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: android.graphics.Outline) {
+                        outline.setRoundRect(0, 0, view.width, view.height, dp(10f))
+                    }
+                }
+            }
+            val pw = dpi(96f)
+            val ph = dpi(144f)
+            headerRow.addView(posterView, LinearLayout.LayoutParams(pw, ph).apply { rightMargin = dpi(14f) })
+            PosterCache.load(context, m.posterUrl, 300, 450) { bmp ->
+                posterView.setImageBitmap(bmp)
+            }
+        }
+        val textCol = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        textCol.addView(modalTitle(m.title))
+        textCol.addView(modalSub("${m.badge} · Release Date: ${m.dateStr} (${m.relativeStr})\n${m.platform}"))
+        textCol.addView(modalBody(m.details))
+        headerRow.addView(textCol, LinearLayout.LayoutParams(0, -2, 1f))
+        contentBox.addView(headerRow)
 
         val isTracked = m.id in act.prefs.trackedIds
         val trackBtn = RowView(context, if (isTracked) "★ Untrack Release" else "★ Track / Pin Release").apply {

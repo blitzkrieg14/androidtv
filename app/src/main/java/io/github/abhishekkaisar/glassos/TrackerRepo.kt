@@ -9,20 +9,22 @@ import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
 
-/** Upcoming movie release for Blu-ray / 4K UHD or Streaming / Digital. */
+/** Upcoming movie release for Theaters, Blu-ray / 4K UHD or Streaming / Digital. */
 data class MovieRelease(
     val id: String,
     val title: String,
     val dateStr: String,
     val relativeStr: String,
     val daysAway: Int,
-    /** "BLURAY" (Blu-ray / 4K UHD) or "STREAMING" (Streaming / Digital VOD). */
+    /** "THEATERS", "BLURAY" (Blu-ray / 4K UHD) or "STREAMING" (Streaming / Digital VOD). */
     val category: String,
-    /** Display badge: "4K UHD", "BLU-RAY", "STREAM", "DIGITAL". */
+    /** Display badge: "THEATERS", "4K UHD", "BLU-RAY", "STREAM", "DIGITAL". */
     val badge: String,
-    /** Platform or edition: e.g. "Max", "Netflix", "4K UHD SteelBook", "Apple TV+", "Disney+". */
+    /** Platform or edition: e.g. "In Theaters Nationwide", "Max", "4K UHD + Blu-ray". */
     val platform: String,
     val details: String,
+    val posterUrl: String = "",
+    val isTheatrical: Boolean = true,
     val pkg: String? = null,
     val isCustom: Boolean = false
 )
@@ -83,6 +85,94 @@ class TrackerSnapshot(
     val updatedAtMs: Long
 )
 
+/**
+ * Asynchronous disk and memory image cache for movie posters and visual artwork.
+ * Downloads posters in background, decodes sampled bitmaps, and dispatches to UI thread.
+ */
+object PosterCache {
+    private val memory = android.util.LruCache<String, android.graphics.Bitmap>(32)
+    private val loading = HashSet<String>()
+    private val callbacks = HashMap<String, ArrayList<(android.graphics.Bitmap) -> Unit>>()
+
+    fun get(url: String): android.graphics.Bitmap? = if (url.isBlank()) null else memory.get(url)
+
+    fun load(ctx: Context, url: String, reqW: Int, reqH: Int, onLoaded: (android.graphics.Bitmap) -> Unit) {
+        if (url.isBlank()) return
+        val cached = memory.get(url)
+        if (cached != null && !cached.isRecycled) {
+            onLoaded(cached)
+            return
+        }
+        val safeHash = (url.hashCode().toLong() and 0xFFFFFFFFL).toString(16)
+        val file = File(File(ctx.filesDir, "tracker/posters").apply { mkdirs() }, "p_$safeHash.jpg")
+
+        synchronized(loading) {
+            val cbs = callbacks.getOrPut(url) { ArrayList() }
+            cbs.add(onLoaded)
+            if (!loading.add(url)) return
+        }
+
+        Thread {
+            try {
+                if (!file.exists() || file.length() <= 0L) {
+                    val ok = downloadUrl(url, file)
+                    if (!ok || !file.exists()) {
+                        synchronized(loading) { loading.remove(url); callbacks.remove(url) }
+                        return@Thread
+                    }
+                }
+                val bmp = decodeSampled(file, reqW, reqH)
+                if (bmp != null) {
+                    memory.put(url, bmp)
+                    val targets = synchronized(loading) {
+                        loading.remove(url)
+                        callbacks.remove(url) ?: emptyList()
+                    }
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        targets.forEach { cb -> cb(bmp) }
+                    }
+                } else {
+                    synchronized(loading) { loading.remove(url); callbacks.remove(url) }
+                }
+            } catch (e: Throwable) {
+                synchronized(loading) { loading.remove(url); callbacks.remove(url) }
+            }
+        }.start()
+    }
+
+    private fun downloadUrl(url: String, to: File): Boolean = try {
+        val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout = 10_000
+            readTimeout = 20_000
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            setRequestProperty("Accept", "image/webp,image/apng,image/*,*/*")
+        }
+        try {
+            if (conn.responseCode != 200) false else {
+                val tmp = File(to.path + ".tmp")
+                conn.inputStream.use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
+                tmp.renameTo(to)
+            }
+        } finally { conn.disconnect() }
+    } catch (e: Throwable) { false }
+
+    private fun decodeSampled(file: File, reqW: Int, reqH: Int): android.graphics.Bitmap? = try {
+        val opt = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(file.path, opt)
+        if (opt.outWidth <= 0 || opt.outHeight <= 0) null else {
+            var inSample = 1
+            while (opt.outWidth / (inSample * 2) >= reqW && opt.outHeight / (inSample * 2) >= reqH) {
+                inSample *= 2
+            }
+            val decOpt = android.graphics.BitmapFactory.Options().apply {
+                inSampleSize = inSample
+                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+            }
+            android.graphics.BitmapFactory.decodeFile(file.path, decOpt)
+        }
+    } catch (e: Throwable) { null }
+}
+
 object TrackerRepo {
     private const val CACHE_TTL_MS = 2 * 3600_000L
 
@@ -91,7 +181,7 @@ object TrackerRepo {
         private set
 
     private fun cacheFile(ctx: Context): File =
-        File(File(ctx.filesDir, "tracker").apply { mkdirs() }, "schedule_v10.json")
+        File(File(ctx.filesDir, "tracker").apply { mkdirs() }, "schedule_v11.json")
 
     /**
      * Performs an HTTPS GET for schedule JSON. If standard TLS fails due to emulator/TV clock skew
@@ -683,16 +773,95 @@ object TrackerRepo {
     private fun fetchLiveMovies(ctx: Context, fallback: List<MovieRelease>): List<MovieRelease> {
         val out = ArrayList<MovieRelease>()
         val seenTitles = HashSet<String>()
+        val theatricalTitles = HashSet<String>()
         val curYear = Calendar.getInstance().get(Calendar.YEAR)
         val outFmt = SimpleDateFormat("MMM d", Locale.US)
         val weekHdrFmt = SimpleDateFormat("EEEE MMMM d, yyyy", Locale.US)
+        val theatricalWeekFmt = SimpleDateFormat("MMMM d, yyyy", Locale.US)
         val excludeTitleRegex = Regex("\\b(Season|Ssn|Series|Collection|Complete|Volume|Vol\\.|Edition|Anniversary|Re-issue)\\b", RegexOption.IGNORE_CASE)
         val weekHeaderRegex = Regex("class='reldate[^']*'[^>]*>(?:<a[^>]*></a>)?([A-Za-z]+\\s+[A-Za-z]+\\s+\\d+,\\s+\\d{4})", RegexOption.IGNORE_CASE)
+        val theatricalWeekHeaderRegex = Regex("class='reldate[^']*'[^>]*>(?:<a[^>]*></a>)?Week of ([A-Za-z]+\\s+\\d+,\\s+\\d{4})", RegexOption.IGNORE_CASE)
         val posterYearRegex = Regex("-(\\d{4})\\.(?:jpg|png|gif)", RegexOption.IGNORE_CASE)
         val titleLinkRegex = Regex("<br/>\\s*<a[^>]*href='/movies/(\\d+)/[^']*'[^>]*>([^<]+)</a>", RegexOption.IGNORE_CASE)
+        val posterSrcRegex = Regex("<img[^>]*src='([^']+)'", RegexOption.IGNORE_CASE)
         val imdbScoreRegex = Regex("imdb:\\s*<a[^>]*>([^<]+)</a>", RegexOption.IGNORE_CASE)
         val mpaaRegex = Regex("<td class='imdblink right'>([^<&]+)", RegexOption.IGNORE_CASE)
 
+        fun toFullPosterUrl(src: String): String {
+            if (src.isBlank()) return ""
+            val upgraded = src.replace("/posters/110/", "/posters/300/")
+            return if (upgraded.startsWith("http")) upgraded else "https://www.dvdsreleasedates.com" + if (upgraded.startsWith("/")) upgraded else "/$upgraded"
+        }
+
+        // 1. Live In-Theaters Movie Releases (movies coming out in cinemas nationwide)
+        fun parseTheatersPage(html: String) {
+            val headerMatches = theatricalWeekHeaderRegex.findAll(html).toList()
+            for (idx in headerMatches.indices) {
+                val hm = headerMatches[idx]
+                val dateHeader = hm.groupValues[1].trim()
+                val parsedDate = try { theatricalWeekFmt.parse(dateHeader) } catch (e: Throwable) { null } ?: continue
+                val days = daysFromToday(parsedDate.time)
+                if (days < 0 || days > 90) continue
+                val dStr = outFmt.format(parsedDate)
+                val relStr = when {
+                    days == 0 -> "Today"
+                    days == 1 -> "Tomorrow"
+                    days <= 7 -> "This Week"
+                    else -> "In ${days}d"
+                }
+
+                val startPos = hm.range.last + 1
+                val endPos = if (idx + 1 < headerMatches.size) headerMatches[idx + 1].range.first else html.length
+                if (startPos >= endPos) continue
+                val weekSection = html.substring(startPos, endPos)
+
+                val cells = weekSection.split("<td class='dvdcell'>")
+                for (cIdx in 1 until cells.size) {
+                    val cell = cells[cIdx]
+                    val tMatch = titleLinkRegex.find(cell) ?: continue
+                    val movieId = tMatch.groupValues[1]
+                    val rawTitle = decodeHtmlText(tMatch.groupValues[2]).removeSuffix(" DVD").trim()
+                    if (rawTitle.isEmpty() || excludeTitleRegex.containsMatchIn(rawTitle)) continue
+
+                    val normKey = rawTitle.lowercase(Locale.US)
+                    theatricalTitles.add(normKey)
+                    if (!seenTitles.add("${normKey}_THEATER")) continue
+
+                    val posterRaw = posterSrcRegex.find(cell)?.groupValues?.get(1)?.trim().orEmpty()
+                    val posterUrl = toFullPosterUrl(posterRaw)
+
+                    val imdb = imdbScoreRegex.find(cell)?.groupValues?.get(1)?.trim().orEmpty()
+                    val mpaa = mpaaRegex.find(cell)?.groupValues?.get(1)?.trim().orEmpty()
+                    val metaParts = ArrayList<String>()
+                    if (mpaa.isNotEmpty() && mpaa != "&nbsp;" && !mpaa.equals("NR", ignoreCase = true)) metaParts.add("Rated $mpaa")
+                    if (imdb.isNotEmpty() && !imdb.equals("NA", ignoreCase = true)) metaParts.add("IMDb $imdb/10")
+                    val metaStr = if (metaParts.isNotEmpty()) metaParts.joinToString(" · ") else "Theatrical Release"
+
+                    out.add(
+                        MovieRelease(
+                            id = "theat_rel_$movieId",
+                            title = rawTitle,
+                            dateStr = dStr,
+                            relativeStr = relStr,
+                            daysAway = days,
+                            category = "THEATERS",
+                            badge = "THEATERS",
+                            platform = "In Theaters Nationwide · $metaStr",
+                            details = "Upcoming theatrical release playing in cinemas nationwide ($dStr). $metaStr.",
+                            posterUrl = posterUrl,
+                            isTheatrical = true
+                        )
+                    )
+                }
+            }
+        }
+
+        try {
+            val (c1, b1) = getJson("https://www.dvdsreleasedates.com/new-movies-$curYear/", mapOf("Accept" to "text/html"))
+            if (c1 == 200 && b1 != null) parseTheatersPage(b1)
+        } catch (e: Throwable) { }
+
+        // 2. Post-Theatrical Releases (strictly movies that had theater releases arriving on 4K/Blu-ray or Digital)
         fun parseDvdReleasePage(html: String, isDigitalPage: Boolean) {
             val headerMatches = weekHeaderRegex.findAll(html).toList()
             for (idx in headerMatches.indices) {
@@ -712,7 +881,6 @@ object TrackerRepo {
                 val cells = weekSection.split("<td class='dvdcell'>")
                 for (cIdx in 1 until cells.size) {
                     val cell = cells[cIdx]
-                    // Require poster year >= current year so only brand-new theatrical movies coming out for the first time are included
                     val posterYear = posterYearRegex.find(cell)?.groupValues?.get(1)?.toIntOrNull() ?: 0
                     if (posterYear < curYear) continue
 
@@ -721,15 +889,24 @@ object TrackerRepo {
                     val rawTitle = decodeHtmlText(tMatch.groupValues[2]).removeSuffix(" DVD").trim()
                     if (rawTitle.isEmpty() || excludeTitleRegex.containsMatchIn(rawTitle)) continue
 
+                    val imdb = imdbScoreRegex.find(cell)?.groupValues?.get(1)?.trim().orEmpty()
+                    val mpaa = mpaaRegex.find(cell)?.groupValues?.get(1)?.trim().orEmpty()
+                    val normTitle = rawTitle.lowercase(Locale.US)
+
+                    // Strict theatrical check: only show movies that had theater releases
+                    val isTheatrical = normTitle in theatricalTitles || (mpaa.isNotEmpty() && mpaa != "NR" && mpaa != "&nbsp;" && imdb.isNotEmpty() && imdb != "NA")
+                    if (!isTheatrical) continue
+
                     val has4k = cell.contains(">4K<", ignoreCase = true)
                     val hasBluray = cell.contains(">Blu-ray<", ignoreCase = true)
                     if (!isDigitalPage && !has4k && !hasBluray) continue
 
-                    val normKey = "${rawTitle.lowercase(Locale.US)}_${if (isDigitalPage) "S" else "B"}"
+                    val normKey = "${normTitle}_${if (isDigitalPage) "S" else "B"}"
                     if (!seenTitles.add(normKey)) continue
 
-                    val imdb = imdbScoreRegex.find(cell)?.groupValues?.get(1)?.trim().orEmpty()
-                    val mpaa = mpaaRegex.find(cell)?.groupValues?.get(1)?.trim().orEmpty()
+                    val posterRaw = posterSrcRegex.find(cell)?.groupValues?.get(1)?.trim().orEmpty()
+                    val posterUrl = toFullPosterUrl(posterRaw)
+
                     val metaParts = ArrayList<String>()
                     if (mpaa.isNotEmpty() && mpaa != "&nbsp;" && !mpaa.equals("NR", ignoreCase = true)) metaParts.add("Rated $mpaa")
                     if (imdb.isNotEmpty() && !imdb.equals("NA", ignoreCase = true)) metaParts.add("IMDb $imdb/10")
@@ -742,11 +919,11 @@ object TrackerRepo {
                         else -> "BLU-RAY"
                     }
                     val platform = when {
-                        isDigitalPage -> "Digital & Streaming · First Home Release"
-                        has4k -> "4K UHD + Blu-ray · First Home Release"
-                        else -> "Blu-ray + Digital · First Home Release"
+                        isDigitalPage -> "Digital & Streaming · Theatrical Release"
+                        has4k -> "4K UHD + Blu-ray · Theatrical Release"
+                        else -> "Blu-ray + Digital · Theatrical Release"
                     }
-                    val details = "New $posterYear theatrical release arriving on ${if (isDigitalPage) "Digital & Streaming" else "4K UHD / Blu-ray"} for the first time on $dStr$metaSuffix."
+                    val details = "New $posterYear theatrical movie arriving on ${if (isDigitalPage) "Digital & Streaming" else "4K UHD / Blu-ray"} on $dStr$metaSuffix."
 
                     out.add(
                         MovieRelease(
@@ -758,14 +935,16 @@ object TrackerRepo {
                             category = category,
                             badge = badge,
                             platform = platform,
-                            details = details
+                            details = details,
+                            posterUrl = posterUrl,
+                            isTheatrical = true
                         )
                     )
                 }
             }
         }
 
-        // 1. Live Digital & Streaming first-time post-theatrical releases (current + next month)
+        // Live Digital & Streaming first-time post-theatrical releases
         try {
             val (code, body) = getJson("https://www.dvdsreleasedates.com/digital-releases/", mapOf("Accept" to "text/html"))
             if (code == 200 && body != null) {
@@ -779,7 +958,7 @@ object TrackerRepo {
             }
         } catch (e: Throwable) { }
 
-        // 2. Live 4K UHD & Blu-ray first-time post-theatrical releases (current + next month)
+        // Live 4K UHD & Blu-ray first-time post-theatrical releases
         try {
             val nowCal = Calendar.getInstance()
             val y1 = nowCal.get(Calendar.YEAR)
@@ -801,7 +980,7 @@ object TrackerRepo {
             }
         } catch (e: Throwable) { }
 
-        // 3. Optional TMDB upcoming movies when an API key is configured
+        // 3. Optional TMDB upcoming theatrical movies when an API key is configured
         val key = Prefs(ctx).effectiveTmdbKey
         if (key.isNotEmpty()) {
             try {
@@ -824,9 +1003,10 @@ object TrackerRepo {
                             val days = daysFromToday(parsed.time)
                             if (days < 0) continue
                             val dStr = outFmt.format(parsed)
-                            val isBr = out.size % 2 == 0
-                            val normKey = "${title.lowercase(Locale.US)}_${if (isBr) "B" else "S"}"
+                            val normKey = "${title.lowercase(Locale.US)}_TMDB"
                             if (!seenTitles.add(normKey)) continue
+                            val posterPath = m.optString("poster_path")
+                            val posterUrl = if (posterPath.startsWith("/")) "https://image.tmdb.org/t/p/w500$posterPath" else ""
                             out.add(
                                 MovieRelease(
                                     id = "tmdb_up_${m.optInt("id")}",
@@ -834,10 +1014,12 @@ object TrackerRepo {
                                     dateStr = dStr,
                                     relativeStr = when (days) { 0 -> "Today"; 1 -> "Tomorrow"; else -> "In ${days}d" },
                                     daysAway = days,
-                                    category = if (isBr) "BLURAY" else "STREAMING",
-                                    badge = if (isBr) "4K UHD" else "STREAM",
-                                    platform = if (isBr) "4K UHD / Blu-ray · First Home Release" else "Digital & Streaming · First Home Release",
-                                    details = m.optString("overview").ifEmpty { "New theatrical release ($dStr)." }
+                                    category = "THEATERS",
+                                    badge = "THEATERS",
+                                    platform = "In Theaters Nationwide · Theatrical Release",
+                                    details = m.optString("overview").ifEmpty { "New theatrical release ($dStr)." },
+                                    posterUrl = posterUrl,
+                                    isTheatrical = true
                                 )
                             )
                         }
@@ -846,10 +1028,9 @@ object TrackerRepo {
             } catch (e: Throwable) { }
         }
 
-        // Balance Digital/Streaming and Blu-ray/4K UHD entries and sort chronologically from today forward
-        val streaming = out.filter { it.category == "STREAMING" && it.daysAway >= 0 }.sortedBy { it.daysAway }.take(10)
-        val bluray = out.filter { it.category == "BLURAY" && it.daysAway >= 0 }.sortedBy { it.daysAway }.take(10)
-        return (streaming + bluray).sortedBy { it.daysAway }
+        // Return movies sorted chronologically from today forward
+        val valid = out.filter { it.isTheatrical && it.daysAway >= 0 }.sortedBy { it.daysAway }
+        return if (valid.isNotEmpty()) valid.take(24) else fallback
     }
 
     // ---------- Curated Schedule Snapshot (Always ready offline & online) ----------
@@ -879,8 +1060,87 @@ object TrackerRepo {
             else -> "In ${days}d"
         }
 
-        // No hardcoded older movies: live first-time post-theatrical releases are fetched from dvdsreleasedates.com / TMDB.
-        val movies = emptyList<MovieRelease>()
+        // Curated upcoming 2026 theatrical movies (ready offline and online)
+        val movies = listOf(
+            MovieRelease(
+                id = "theat_avengers_doomsday",
+                title = "Avengers: Doomsday",
+                dateStr = "Dec 18",
+                relativeStr = "In Theaters",
+                daysAway = 50,
+                category = "THEATERS",
+                badge = "THEATERS",
+                platform = "In Theaters Nationwide · Marvel Studios",
+                details = "Upcoming theatrical release. Directed by Anthony and Joe Russo, starring Robert Downey Jr. and Pedro Pascal.",
+                posterUrl = "https://www.dvdsreleasedates.com/posters/300/A/Avengers-Doomsday-2026.jpg",
+                isTheatrical = true
+            ),
+            MovieRelease(
+                id = "theat_hunger_games_sunrise",
+                title = "The Hunger Games: Sunrise on the Reaping",
+                dateStr = "Nov 20",
+                relativeStr = "In Theaters",
+                daysAway = 22,
+                category = "THEATERS",
+                badge = "THEATERS",
+                platform = "In Theaters Nationwide · Lionsgate",
+                details = "Upcoming theatrical release in cinemas nationwide. The story of Haymitch Abernathy and the 50th Hunger Games.",
+                posterUrl = "https://www.dvdsreleasedates.com/posters/300/T/The-Hunger-Games-Sunrise-on-the-Reaping-2026.jpg",
+                isTheatrical = true
+            ),
+            MovieRelease(
+                id = "theat_spiderman_brand_new_day",
+                title = "Spider-Man: Brand New Day",
+                dateStr = "Dec 15",
+                relativeStr = "4K UHD / Blu-ray",
+                daysAway = 47,
+                category = "BLURAY",
+                badge = "4K UHD",
+                platform = "4K UHD + Blu-ray · Theatrical Release",
+                details = "Hit 2026 theatrical release arriving on 4K Ultra HD and Blu-ray for the first time. Rated PG-13 · IMDb 7.9/10.",
+                posterUrl = "https://www.dvdsreleasedates.com/posters/300/S/Spider-Man-Brand-New-Day-2026.jpg",
+                isTheatrical = true
+            ),
+            MovieRelease(
+                id = "theat_wildwood",
+                title = "Wildwood",
+                dateStr = "Oct 31",
+                relativeStr = "Digital & Streaming",
+                daysAway = 2,
+                category = "STREAMING",
+                badge = "STREAM",
+                platform = "Digital & Streaming · Theatrical Release",
+                details = "Acclaimed theatrical stop-motion epic from Laika arriving on Digital and Streaming. Rated PG-13 · IMDb 8.7/10.",
+                posterUrl = "https://www.dvdsreleasedates.com/posters/300/W/Wildwood-2026.jpg",
+                isTheatrical = true
+            ),
+            MovieRelease(
+                id = "theat_wicker",
+                title = "Wicker",
+                dateStr = "Nov 6",
+                relativeStr = "In Theaters",
+                daysAway = 8,
+                category = "THEATERS",
+                badge = "THEATERS",
+                platform = "In Theaters Nationwide · A24",
+                details = "Upcoming theatrical release from A24. Starring Olivia Colman and Dev Patel. Rated R · IMDb 7.4/10.",
+                posterUrl = "https://www.dvdsreleasedates.com/posters/300/W/Wicker-2026.jpg",
+                isTheatrical = true
+            ),
+            MovieRelease(
+                id = "theat_man_with_bag",
+                title = "The Man with the Bag",
+                dateStr = "Dec 4",
+                relativeStr = "In Theaters",
+                daysAway = 36,
+                category = "THEATERS",
+                badge = "THEATERS",
+                platform = "In Theaters Nationwide · Theatrical Holiday Feature",
+                details = "Upcoming holiday comedy in theaters nationwide starring Alan Ritchson and Arnold Schwarzenegger. Rated PG.",
+                posterUrl = "https://www.dvdsreleasedates.com/posters/300/T/The-Man-with-the-Bag-2026.jpg",
+                isTheatrical = true
+            )
+        )
 
         val sports = listOf(
             SportGame(
@@ -1084,6 +1344,7 @@ object TrackerRepo {
                     put("relativeStr", m.relativeStr); put("daysAway", m.daysAway)
                     put("category", m.category); put("badge", m.badge)
                     put("platform", m.platform); put("details", m.details)
+                    put("posterUrl", m.posterUrl); put("isTheatrical", m.isTheatrical)
                     put("pkg", m.pkg ?: "")
                 })
             }
@@ -1136,7 +1397,8 @@ object TrackerRepo {
                     dateStr = o.getString("dateStr"), relativeStr = o.optString("relativeStr"),
                     daysAway = o.optInt("daysAway", 1), category = o.getString("category"),
                     badge = o.getString("badge"), platform = o.getString("platform"),
-                    details = o.optString("details"), pkg = o.optString("pkg").ifEmpty { null }
+                    details = o.optString("details"), posterUrl = o.optString("posterUrl", ""),
+                    isTheatrical = o.optBoolean("isTheatrical", true), pkg = o.optString("pkg").ifEmpty { null }
                 )
             }.filter { it.daysAway >= 0 }
             val sArr = root.getJSONArray("sports")
