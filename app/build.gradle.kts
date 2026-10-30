@@ -33,28 +33,29 @@ android {
         applicationId = "io.github.abhishekkaisar.glassos"
         minSdk = 22
         targetSdk = 28
-        versionCode = 12
-        versionName = "1.1.8"
+        versionCode = 13
+        versionName = "1.1.9"
         buildConfigField("String", "TMDB_API_KEY", "\"${tmdbKey.replace("\"", "")}\"")
     }
 
     signingConfigs {
-        if (keystoreProps.getProperty("storeFile") != null) {
-            create("release") {
-                storeFile = file(keystoreProps.getProperty("storeFile"))
-                storePassword = keystoreProps.getProperty("storePassword")
-                keyAlias = keystoreProps.getProperty("keyAlias")
-                keyPassword = keystoreProps.getProperty("keyPassword")
-            }
+        create("universal") {
+            storeFile = file("glassos.jks")
+            storePassword = "androidtvglass"
+            keyAlias = "glassos"
+            keyPassword = "androidtvglass"
         }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("universal")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfigs.findByName("release")?.let { signingConfig = it }
+            signingConfig = signingConfigs.getByName("universal")
         }
     }
     buildFeatures { buildConfig = true }
