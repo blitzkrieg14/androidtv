@@ -27,19 +27,19 @@ class Prefs(ctx: Context) {
         get() = sp.getString("topShelf", HeroRepo.SRC_TRACKER) ?: HeroRepo.SRC_TRACKER
         set(v) { sp.edit().putString("topShelf", v).apply() }
 
-    /** Multi-select sports filter for Today's Sports in the Top Shelf tracker. */
+    /** Multi-select sports filter for Favorite Sports in the Top Shelf tracker. */
     var selectedSports: Set<String>
         get() {
-            val raw = sp.getString("selectedSports", null) ?: return DEFAULT_SPORTS
+            val raw = sp.getString("selectedSports_v2", null) ?: return DEFAULT_SPORTS
             val parsed = raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             return if (parsed.isEmpty()) DEFAULT_SPORTS else parsed
         }
-        set(v) { sp.edit().putString("selectedSports", v.joinToString(",")).apply() }
+        set(v) { sp.edit().putString("selectedSports_v2", v.joinToString(",")).apply() }
 
-    /** Filter for Upcoming Movies in Top Shelf: ALL, BLURAY, or STREAMING. */
+    /** Filter for Upcoming Movies in Top Shelf: THIS_WEEK (default), THIS_MONTH, ALL, or THEATERS. */
     var movieFilter: String
-        get() = sp.getString("movieFilter", "ALL") ?: "ALL"
-        set(v) { sp.edit().putString("movieFilter", v).apply() }
+        get() = sp.getString("movieFilter_v2", "THIS_WEEK") ?: "THIS_WEEK"
+        set(v) { sp.edit().putString("movieFilter_v2", v).apply() }
 
     /** Filter for UFC/Boxing in Top Shelf: ALL, UFC, or BOXING. */
     var combatFilter: String
@@ -129,7 +129,17 @@ class Prefs(ctx: Context) {
 
     companion object {
         const val DEFAULT_SCENE = "scene:navy"
-        val ALL_SPORTS = listOf("NBA", "NFL", "Soccer", "NHL", "MLB", "F1")
+        val ALL_SPORTS = listOf("NBA", "NFL", "NHL", "MLB", "Soccer", "F1", "CFB", "NCAAB")
+        val SPORT_LABELS = mapOf(
+            "NBA" to "NBA (Pro Basketball)",
+            "NFL" to "NFL (Pro Football)",
+            "NHL" to "NHL (Pro Hockey)",
+            "MLB" to "MLB (Major League Baseball)",
+            "Soccer" to "Soccer (EPL & Champions League)",
+            "F1" to "Formula 1 Racing",
+            "CFB" to "College Football (NCAA)",
+            "NCAAB" to "College Basketball (NCAA)"
+        )
         val DEFAULT_SPORTS = ALL_SPORTS.toSet()
         val DEFAULT_TRACKED_IDS = setOf("spt_nba_1", "spt_nfl_1")
     }

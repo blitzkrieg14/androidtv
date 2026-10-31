@@ -34,7 +34,7 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
     private val countryRow = RowView(context, "Country")
     private val shelfRow = RowView(context, "Top Shelf")
     private val spoilersRow = RowView(context, "No spoilers (Sports & UFC)")
-    private val sportsRow = RowView(context, "Today's sports filter")
+    private val sportsRow = RowView(context, "Favorite sports to track")
     private val addTrackRow = RowView(context, "Add item to track")
     private val keyRow = RowView(context, "TMDB API key")
     private val appsRow = RowView(context, "Top row apps")
@@ -154,7 +154,10 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         }
         sportsRow.onClick = {
             close(instant = true) {
-                act.trackerModal.openSportsFilter { act.scheduleView.renderAll() }
+                act.trackerModal.openSportsFilter {
+                    act.scheduleView.renderAll()
+                    updateValues()
+                }
             }
         }
         addTrackRow.onClick = {
@@ -215,7 +218,7 @@ class SettingsView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         shelfRow.valueView.text = HeroRepo.sourceLabel(act.prefs.topShelf)
         spoilersRow.valueView.text = if (act.prefs.noSpoilers) "On" else "Off"
         val selSports = act.prefs.selectedSports
-        sportsRow.valueView.text = if (selSports.size >= Prefs.ALL_SPORTS.size) "All (${selSports.size})" else "${selSports.size} selected"
+        sportsRow.valueView.text = if (selSports.size >= Prefs.ALL_SPORTS.size) "All sports" else selSports.joinToString(", ")
         keyRow.valueView.text = when {
             act.prefs.tmdbKey.isNotEmpty() -> "Your key"
             BuildConfig.TMDB_API_KEY.isNotEmpty() -> "Built in"

@@ -81,6 +81,8 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
     private val movieFilterChips = ArrayList<FilterChip>()
     private val sportFilterChips = ArrayList<FilterChip>()
     private val combatFilterChips = ArrayList<FilterChip>()
+    private lateinit var sportFilterRow: LinearLayout
+    private var activeSportViewFilter: String? = null
 
     private val moviesList = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
     private val sportsList = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; clipChildren = false; clipToPadding = false }
@@ -249,7 +251,7 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
 
     private fun setupMoviesColumn() {
         val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; clipChildren = true }
-        col.addView(makeColumnHeader("UPCOMING MOVIES", "Theaters, 4K & Digital", movieCountView))
+        col.addView(makeColumnHeader("UPCOMING MOVIES", "Theatrical Releases · This Week", movieCountView))
 
         val chipScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
@@ -262,7 +264,12 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
             setPadding(dpi(8f), 0, dpi(8f), dpi(3f))
             clipChildren = false; clipToPadding = false
         }
-        val options = listOf("ALL" to "All", "THEATERS" to "In Theaters", "BLURAY" to "Blu-ray / 4K", "STREAMING" to "Digital / Stream")
+        val options = listOf(
+            "THIS_WEEK" to "This Week",
+            "THIS_MONTH" to "This Month",
+            "ALL" to "All Upcoming",
+            "THEATERS" to "In Theaters"
+        )
         for ((code, label) in options) {
             val chip = FilterChip(context, label).apply {
                 id = View.generateViewId()
@@ -284,7 +291,7 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
 
     private fun setupSportsColumn() {
         val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; clipChildren = true }
-        col.addView(makeColumnHeader("SPORTS TODAY", "Filter or multi-select", sportCountView))
+        col.addView(makeColumnHeader("SPORTS TODAY", "★ Favorite Sports · OK to browse", sportCountView))
 
         val chipScroll = HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
@@ -292,48 +299,12 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
             isFocusable = false
             clipChildren = false; clipToPadding = false
         }
-        val filterRow = LinearLayout(context).apply {
+        sportFilterRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dpi(8f), 0, dpi(8f), dpi(3f))
             clipChildren = false; clipToPadding = false
         }
-        val allChip = FilterChip(context, "All").apply {
-            id = View.generateViewId()
-            tag = "ALL"
-            onClick = {
-                prefs.selectedSports = Prefs.ALL_SPORTS.toSet()
-                renderSports()
-                updateTopButtons()
-                wireFocusGraph()
-            }
-        }
-        sportFilterChips.add(allChip)
-        filterRow.addView(allChip, LinearLayout.LayoutParams(-2, dpi(18f)).apply { rightMargin = dpi(4f) })
-
-        for (sp in Prefs.ALL_SPORTS) {
-            val chip = FilterChip(context, sp).apply {
-                id = View.generateViewId()
-                tag = sp
-                onClick = {
-                    val cur = prefs.selectedSports.toMutableSet()
-                    if (cur.size == Prefs.ALL_SPORTS.size) {
-                        cur.clear()
-                        cur.add(sp)
-                    } else if (sp in cur) {
-                        if (cur.size > 1) cur.remove(sp) else cur.addAll(Prefs.ALL_SPORTS)
-                    } else {
-                        cur.add(sp)
-                    }
-                    prefs.selectedSports = cur
-                    renderSports()
-                    updateTopButtons()
-                    wireFocusGraph()
-                }
-            }
-            sportFilterChips.add(chip)
-            filterRow.addView(chip, LinearLayout.LayoutParams(-2, dpi(18f)).apply { rightMargin = dpi(4f) })
-        }
-        chipScroll.addView(filterRow, ViewGroup.LayoutParams(-2, -2))
+        chipScroll.addView(sportFilterRow, ViewGroup.LayoutParams(-2, -2))
         col.addView(chipScroll, LinearLayout.LayoutParams(-1, -2))
         col.addView(sportsScroll, LinearLayout.LayoutParams(-1, 0, 1f))
         sportsBox.addView(col, LayoutParams(-1, -1))
@@ -476,17 +447,24 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
 
         val sel = prefs.selectedSports
         sportsFilterBtn.label = if (sel.size >= Prefs.ALL_SPORTS.size) "Sports: All"
-        else "Sports: ${sel.joinToString("/")}"
+        else "★ Favorites (${sel.size})"
         sportsFilterBtn.active = sel.size < Prefs.ALL_SPORTS.size
     }
 
     private fun updateCountLabels() {
         val noSpoilers = prefs.noSpoilers
-        movieCountView.text = if (activeColumn == 0) "Back to exit" else "${movieViews.size} · OK to browse"
+        val movTag = when (prefs.movieFilter) {
+            "THIS_WEEK" -> "This Week"
+            "THIS_MONTH" -> "This Month"
+            "THEATERS" -> "In Theaters"
+            else -> "All Upcoming"
+        }
+        movieCountView.text = if (activeColumn == 0) "Back to exit" else "${movieViews.size} · $movTag"
         movieCountView.setTextColor(if (activeColumn == 0) 0xFF64D2FF.toInt() else 0x90FFFFFF.toInt())
 
-        val spTag = if (noSpoilers) "No Spoilers" else "Today"
-        sportCountView.text = if (activeColumn == 1) "Back to exit" else "${sportViews.size} · $spTag"
+        val sel = prefs.selectedSports
+        val sportLabel = if (activeSportViewFilter != null) activeSportViewFilter!! else if (sel.size < Prefs.ALL_SPORTS.size) "${sel.size} Favorites" else if (noSpoilers) "No Spoilers" else "Today"
+        sportCountView.text = if (activeColumn == 1) "Back to exit" else "${sportViews.size} · $sportLabel"
         sportCountView.setTextColor(if (activeColumn == 1) 0xFF64D2FF.toInt() else 0x90FFFFFF.toInt())
 
         combatCountView.text = if (activeColumn == 2) "Back to exit" else "${combatViews.size} · OK to browse"
@@ -500,14 +478,23 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
         val tracked = prefs.trackedIds
         val onlyTracked = prefs.trackedOnly
         val filtered = snapshot.movies.filter { m ->
-            m.isTheatrical && m.daysAway >= 0 && (filter == "ALL" || m.category == filter) && (!onlyTracked || m.id in tracked)
+            val matchesFilter = when (filter) {
+                "THIS_WEEK" -> m.daysAway in 0..7
+                "THIS_MONTH" -> m.daysAway in 0..30
+                "THEATERS" -> m.category == "THEATERS"
+                "BLURAY" -> m.category == "BLURAY"
+                "STREAMING" -> m.category == "STREAMING"
+                else -> true // "ALL"
+            }
+            m.isTheatrical && m.daysAway >= 0 && matchesFilter && (!onlyTracked || m.id in tracked)
         }.sortedWith(compareByDescending<MovieRelease> { it.id in tracked }.thenBy { it.daysAway })
 
         moviesList.removeAllViews()
         movieViews.clear()
 
         if (filtered.isEmpty()) {
-            moviesList.addView(emptyHint("No upcoming theatrical releases"))
+            val emptyMsg = if (filter == "THIS_WEEK") "No releases this week · Try 'This Month' or 'All Upcoming'" else "No upcoming theatrical releases"
+            moviesList.addView(emptyHint(emptyMsg))
             return
         }
         for (m in filtered) {
@@ -528,30 +515,71 @@ class TopShelfScheduleView(private val act: HomeScreen) : FrameLayout(act.ctx) {
     private fun renderSports() {
         val sel = prefs.selectedSports
         val noSpoilers = prefs.noSpoilers
-        val allActive = sel.size >= Prefs.ALL_SPORTS.size
-        sportFilterChips.forEach { chip ->
-            val tag = chip.tag as? String ?: ""
-            if (tag == "ALL") {
-                chip.chosen = allActive
-                chip.label = "All"
-            } else {
-                val on = tag in sel
-                chip.chosen = on && !allActive
-                chip.label = if (on && !allActive) "✓ $tag" else tag
+        val isAll = sel.size >= Prefs.ALL_SPORTS.size
+
+        // Build chips dynamically based on user's favorite sports
+        if (::sportFilterRow.isInitialized) {
+            sportFilterRow.removeAllViews()
+            sportFilterChips.clear()
+
+            val allLabel = if (isAll) "All Sports" else "★ All Favorites (${sel.size})"
+            val allChip = FilterChip(context, allLabel).apply {
+                id = View.generateViewId()
+                tag = "ALL"
+                chosen = activeSportViewFilter == null
+                onClick = {
+                    activeSportViewFilter = null
+                    renderSports()
+                    wireFocusGraph()
+                }
+            }
+            sportFilterChips.add(allChip)
+            sportFilterRow.addView(allChip, LinearLayout.LayoutParams(-2, dpi(18f)).apply { rightMargin = dpi(4f) })
+
+            val pickChip = FilterChip(context, "★ Pick Sports").apply {
+                id = View.generateViewId()
+                tag = "PICK"
+                chosen = false
+                onClick = {
+                    act.trackerModal.openSportsFilter {
+                        renderAll()
+                    }
+                }
+            }
+            sportFilterChips.add(pickChip)
+            sportFilterRow.addView(pickChip, LinearLayout.LayoutParams(-2, dpi(18f)).apply { rightMargin = dpi(4f) })
+
+            val displayedSports = if (isAll) Prefs.ALL_SPORTS else sel.toList()
+            for (sp in displayedSports) {
+                val chip = FilterChip(context, sp).apply {
+                    id = View.generateViewId()
+                    tag = sp
+                    chosen = activeSportViewFilter == sp
+                    onClick = {
+                        activeSportViewFilter = if (activeSportViewFilter == sp) null else sp
+                        renderSports()
+                        wireFocusGraph()
+                    }
+                }
+                sportFilterChips.add(chip)
+                sportFilterRow.addView(chip, LinearLayout.LayoutParams(-2, dpi(18f)).apply { rightMargin = dpi(4f) })
             }
         }
 
+        val targetSports = if (activeSportViewFilter != null) setOf(activeSportViewFilter!!) else sel
         val tracked = prefs.trackedIds
         val onlyTracked = prefs.trackedOnly
         val filtered = snapshot.sports.filter { s ->
-            s.sport in sel && (!onlyTracked || s.id in tracked)
+            s.sport in targetSports && (!onlyTracked || s.id in tracked)
         }.sortedWith(compareByDescending<SportGame> { it.id in tracked }.thenByDescending { it.isLive && !noSpoilers })
 
         sportsList.removeAllViews()
         sportViews.clear()
 
         if (filtered.isEmpty()) {
-            sportsList.addView(emptyHint("No games for selected sport filter"))
+            val emptyMsg = if (activeSportViewFilter != null) "No games today for $activeSportViewFilter"
+                else "No games today for your favorite sports · Click '+ Pick Sports' to add more"
+            sportsList.addView(emptyHint(emptyMsg))
             return
         }
         for (s in filtered) {
@@ -1239,29 +1267,30 @@ class TrackerModal(private val act: HomeScreen) : FrameLayout(act.ctx) {
         if (rf != null && rf.isAttachedToWindow) rf.requestFocus() else act.scheduleView.requestDefaultFocus()
     }
 
-    /** Multi-select Sports Filter dialog: lets user select one or multiple sports for Today's Sports. */
+    /** Multi-select Favorite Sports dialog: lets user pick favorite sports to track. */
     fun openSportsFilter(changed: () -> Unit) {
         contentBox.removeAllViews()
-        contentBox.addView(modalTitle("Filter Today's Sports"))
-        contentBox.addView(modalSub("Select one or multiple sports to display in Today's Sports."))
+        contentBox.addView(modalTitle("Favorite Sports to Track"))
+        contentBox.addView(modalSub("Select your favorite sports. Only games and scores from your chosen sports will appear in the tracker."))
 
         val rows = ArrayList<Pair<String, RowView>>()
         fun refreshChecks() {
             val sel = act.prefs.selectedSports
             for ((sp, r) in rows) {
                 val on = sp in sel
-                r.valueView.text = if (on) "✓ Selected" else "Off"
+                r.valueView.text = if (on) "★ Tracking" else "Off"
                 r.valueView.setTextColor(if (on) 0xFF7CE38B.toInt() else 0x80FFFFFF.toInt())
             }
         }
 
         for (sp in Prefs.ALL_SPORTS) {
-            val r = RowView(context, sp).apply {
+            val label = Prefs.SPORT_LABELS[sp] ?: sp
+            val r = RowView(context, label).apply {
                 onClick = {
                     val cur = act.prefs.selectedSports.toMutableSet()
                     if (sp in cur) {
                         if (cur.size > 1) cur.remove(sp)
-                        else Toast.makeText(context, "Keep at least one sport selected", Toast.LENGTH_SHORT).show()
+                        else Toast.makeText(context, "Keep at least one favorite sport selected", Toast.LENGTH_SHORT).show()
                     } else cur.add(sp)
                     act.prefs.selectedSports = cur
                     refreshChecks()

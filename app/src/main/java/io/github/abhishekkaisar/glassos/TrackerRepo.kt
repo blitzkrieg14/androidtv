@@ -458,7 +458,9 @@ object TrackerRepo {
             Triple("Soccer", "UCL", "https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard"),
             Triple("NHL", "NHL", "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard"),
             Triple("MLB", "MLB", "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard"),
-            Triple("F1", "F1", "https://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard")
+            Triple("F1", "F1", "https://site.api.espn.com/apis/site/v2/sports/racing/f1/scoreboard"),
+            Triple("CFB", "CFB", "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard"),
+            Triple("NCAAB", "NCAAB", "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard")
         )
         val liveBySport = HashMap<String, ArrayList<SportGame>>()
         val timeFmt = SimpleDateFormat("h:mm a", Locale.US)
@@ -1102,15 +1104,28 @@ object TrackerRepo {
                 isTheatrical = true
             ),
             MovieRelease(
+                id = "theat_minecraft_movie",
+                title = "A Minecraft Movie",
+                dateStr = "Tomorrow",
+                relativeStr = "In Theaters",
+                daysAway = 1,
+                category = "THEATERS",
+                badge = "THEATERS",
+                platform = "In Theaters Nationwide · Warner Bros.",
+                details = "Theatrical release in cinemas nationwide. Starring Jack Black and Jason Momoa. Rated PG.",
+                posterUrl = "https://www.dvdsreleasedates.com/posters/300/M/A-Minecraft-Movie-2025.jpg",
+                isTheatrical = true
+            ),
+            MovieRelease(
                 id = "theat_wildwood",
                 title = "Wildwood",
-                dateStr = "Oct 31",
-                relativeStr = "Digital & Streaming",
+                dateStr = "Nov 2",
+                relativeStr = "This Weekend",
                 daysAway = 2,
-                category = "STREAMING",
-                badge = "STREAM",
-                platform = "Digital & Streaming · Theatrical Release",
-                details = "Acclaimed theatrical stop-motion epic from Laika arriving on Digital and Streaming. Rated PG-13 · IMDb 8.7/10.",
+                category = "THEATERS",
+                badge = "THEATERS",
+                platform = "In Theaters Nationwide · Laika",
+                details = "Acclaimed theatrical stop-motion epic from Laika opening in theaters nationwide. Directed by Travis Knight. Rated PG.",
                 posterUrl = "https://www.dvdsreleasedates.com/posters/300/W/Wildwood-2026.jpg",
                 isTheatrical = true
             ),
@@ -1118,8 +1133,8 @@ object TrackerRepo {
                 id = "theat_wicker",
                 title = "Wicker",
                 dateStr = "Nov 6",
-                relativeStr = "In Theaters",
-                daysAway = 8,
+                relativeStr = "This Friday",
+                daysAway = 6,
                 category = "THEATERS",
                 badge = "THEATERS",
                 platform = "In Theaters Nationwide · A24",
@@ -1321,6 +1336,36 @@ object TrackerRepo {
                 isLive = false,
                 details = "Formula 1 Grand Prix — Main Race (56 Laps) · Live coverage on ESPN and F1 TV Pro",
                 cleanDetails = "Formula 1 Grand Prix — Main Race (56 Laps) · Scheduled Start: 4:00 PM ET on ESPN and F1 TV Pro",
+                pkg = "com.espn.score_center"
+            ),
+            SportGame(
+                id = "spt_cfb_1",
+                sport = "CFB",
+                leagueLabel = "NCAA",
+                matchup = "Ohio State vs. Penn State",
+                subtitle = "College Football · FOX · Top 5 Clash",
+                timeOrStatus = "12:00 PM",
+                scheduledTime = "12:00 PM",
+                cleanSubtitle = "College Football · FOX · Big Ten",
+                network = "FOX",
+                isLive = false,
+                details = "NCAA College Football: Ohio State Buckeyes at Penn State Nittany Lions · Kickoff 12:00 PM ET on FOX · Beaver Stadium",
+                cleanDetails = "NCAA College Football: Ohio State Buckeyes at Penn State Nittany Lions · Kickoff 12:00 PM ET on FOX · Beaver Stadium",
+                pkg = null
+            ),
+            SportGame(
+                id = "spt_ncaab_1",
+                sport = "NCAAB",
+                leagueLabel = "NCAA",
+                matchup = "Duke vs. North Carolina",
+                subtitle = "College Basketball · ESPN · Rivalry",
+                timeOrStatus = "6:30 PM",
+                scheduledTime = "6:30 PM",
+                cleanSubtitle = "College Basketball · ESPN · ACC",
+                network = "ESPN",
+                isLive = false,
+                details = "NCAA Men's Basketball: Duke Blue Devils at North Carolina Tar Heels · 6:30 PM ET on ESPN · Dean E. Smith Center",
+                cleanDetails = "NCAA Men's Basketball: Duke Blue Devils at North Carolina Tar Heels · 6:30 PM ET on ESPN · Dean E. Smith Center",
                 pkg = "com.espn.score_center"
             )
         )
